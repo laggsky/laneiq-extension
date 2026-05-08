@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "LaneIQ \u2014 DAT Load Matcher",
+  "version": "1.6",
+  "description": "Highlights DAT loads that match your freight history. Color-coded by tier: same lane + broker, same lane, or same origin.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "windows",
+    "unlimitedStorage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "*://*.dat.com/*",
+    "*://one.dat.com/*",
+    "https://maps.googleapis.com/*"
+  ],
+  "icons": {
+    "16":  "icons/icon16.png",
+    "48":  "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "DAT Lane Matcher",
+    "default_icon": {
+      "16":  "icons/icon16.png",
+      "48":  "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.dat.com/*",
+        "*://one.dat.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

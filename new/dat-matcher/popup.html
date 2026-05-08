@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif; width: 360px; background: #f5f5f7; color: #1d1d1f; padding: 18px; }
+
+    .header { display:flex; align-items:center; gap:10px; margin-bottom:16px; border-bottom:1px solid rgba(0,0,0,.07); padding-bottom:14px; }
+    .dot { width:9px; height:9px; border-radius:50%; background:#F59E0B; flex-shrink:0; }
+    .title { font-size:13px; font-weight:700; letter-spacing:-.01em; color:#1d1d1f; }
+    .subtitle { font-size:11px; color:#aeaeb2; margin-top:1px; }
+
+    .status-box { background:#fff; border:1px solid rgba(0,0,0,.07); border-radius:12px; padding:12px 14px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04); }
+    .status-box.loaded  { border-color:rgba(52,199,89,.3); background:rgba(52,199,89,.06); }
+    .status-box.loading { border-color:rgba(245,158,11,.25); background:rgba(245,158,11,.04); }
+    .status-box.loading .status-val { color:#F59E0B; }
+    @keyframes dlm-pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+    .status-box.loading .status-val { animation: dlm-pulse 1.2s ease-in-out infinite; }
+    .status-label { font-size:9px; color:#aeaeb2; letter-spacing:.06em; text-transform:uppercase; font-weight:600; margin-bottom:4px; }
+    .status-val { color:#6e6e73; font-weight:600; font-size:13px; }
+    .status-box.loaded .status-val { color:#34c759; }
+    .status-sub { color:#aeaeb2; font-size:11px; margin-top:3px; }
+
+    #file-list { margin-bottom:12px; }
+    .file-item { display:flex; align-items:center; justify-content:space-between; background:#fff; border:none; border-left:3px solid #34c759; border-radius:10px; padding:8px 12px; margin-bottom:6px; font-size:11px; box-shadow:0 1px 4px rgba(0,0,0,.05); animation:fadeIn .2s ease; }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
+    .file-name { color:#34c759; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:200px; font-weight:600; }
+    .file-count { color:#aeaeb2; font-size:10px; margin-left:6px; white-space:nowrap; }
+    .file-remove { background:none; border:none; color:#c7c7cc; cursor:pointer; font-size:14px; padding:0 2px; line-height:1; transition:color .15s; }
+    .file-remove:hover { color:#ff3b30; }
+
+    .drop-zone { border:2px dashed rgba(0,0,0,.12); border-radius:12px; padding:18px 16px; text-align:center; cursor:pointer; transition:border-color .18s,background .18s; margin-bottom:12px; background:#fff; }
+    .drop-zone:hover, .drop-zone.drag { border-color:#F59E0B; background:rgba(245,158,11,.05); }
+    .drop-zone-icon { font-size:22px; color:#aeaeb2; margin-bottom:7px; }
+    .drop-zone-text { font-size:12px; color:#6e6e73; font-weight:600; }
+    .drop-zone-sub  { font-size:11px; color:#aeaeb2; margin-top:3px; }
+    input[type=file] { display:none; }
+
+    .progress { display:none; margin-bottom:12px; }
+    .progress-bar { height:3px; background:rgba(0,0,0,.08); border-radius:2px; overflow:hidden; }
+    .progress-fill { height:100%; background:#F59E0B; width:0%; transition:width .3s; }
+    .progress-text { font-size:10px; color:#aeaeb2; margin-top:5px; text-align:center; }
+
+    .section { background:#fff; border:1px solid rgba(0,0,0,.07); border-radius:12px; padding:14px 16px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04); }
+    .section-label { font-size:9px; color:#aeaeb2; letter-spacing:.06em; text-transform:uppercase; font-weight:600; margin-bottom:11px; display:flex; align-items:center; gap:5px; }
+    .section-label span { color:#F59E0B; }
+
+    .gmail-row { display:flex; gap:7px; align-items:center; margin-bottom:10px; }
+    .gmail-input { flex:1; background:rgba(0,0,0,.05); border:none; border-radius:9px; color:#1d1d1f; font-size:12px; padding:7px 11px; font-family:inherit; outline:none; transition:background .15s,box-shadow .15s; }
+    .gmail-input:focus { background:rgba(0,0,0,.07); box-shadow:0 0 0 3px rgba(0,122,255,.18); }
+    .gmail-input::placeholder { color:#c7c7cc; }
+    .gmail-save { background:#007aff; border:none; color:#fff; font-size:11px; font-weight:600; padding:7px 13px; border-radius:8px; cursor:pointer; font-family:inherit; white-space:nowrap; transition:background .15s; }
+    .gmail-save:hover { background:#0071e3; }
+
+    .acct-row { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+    .acct-label { font-size:11px; color:#6e6e73; white-space:nowrap; }
+    .acct-btns { display:flex; gap:5px; }
+    .acct-btn {
+      background:rgba(0,0,0,.05); border:1px solid rgba(0,0,0,.07); color:#6e6e73;
+      font-size:12px; font-weight:700; width:32px; height:30px;
+      border-radius:8px; cursor:pointer; font-family:inherit;
+      transition:all .15s; display:flex; align-items:center; justify-content:center;
+    }
+    .acct-btn:hover { border-color:#F59E0B; color:#F59E0B; }
+    .acct-btn.active { background:#F59E0B; border-color:#F59E0B; color:#000; }
+
+    .gmail-hint { font-size:10px; color:#aeaeb2; margin-top:9px; line-height:1.6; }
+    .gmail-hint a { color:#007aff; text-decoration:none; }
+    .gmail-status { font-size:11px; margin-top:7px; }
+    .gmail-status.set { color:#34c759; }
+    .gmail-status.unset { color:#aeaeb2; }
+
+    .legend { background:#fff; border:1px solid rgba(0,0,0,.07); border-radius:12px; padding:12px 14px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04); }
+    .legend-title { font-size:9px; color:#aeaeb2; letter-spacing:.06em; text-transform:uppercase; font-weight:600; margin-bottom:9px; }
+    .legend-row { display:flex; align-items:center; gap:8px; margin-bottom:5px; font-size:11px; color:#6e6e73; }
+    .legend-row:last-child { margin-bottom:0; }
+    .sw { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+    .sw.p { background:rgba(167,139,250,.3); border:1px solid #a78bfa; }
+    .sw.g { background:rgba(52,199,89,.25); border:1px solid #34c759; }
+    .sw.y { background:rgba(251,191,36,.3); border:1px solid #fbbf24; }
+    .sw.b { background:rgba(96,165,250,.3); border:1px solid #60a5fa; }
+
+    .btn-row { display:flex; gap:8px; }
+    .btn { flex:1; background:#fff; border:1px solid rgba(0,0,0,.1); color:#6e6e73; padding:8px; font-size:12px; border-radius:10px; cursor:pointer; font-family:inherit; transition:border-color .15s,color .15s; box-shadow:0 1px 3px rgba(0,0,0,.06); }
+    .btn:hover { border-color:#F59E0B; color:#F59E0B; }
+    .btn.danger:hover { border-color:#ff3b30; color:#ff3b30; }
+    .error { color:#ff3b30; font-size:11px; margin-top:9px; display:none; padding:8px 10px; background:rgba(255,59,48,.06); border:1px solid rgba(255,59,48,.2); border-radius:8px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="dot"></div>
+    <div>
+      <div class="title">LaneIQ</div>
+      <div class="subtitle">DAT Load Matcher</div>
+    </div>
+  </div>
+
+  <div class="status-box" id="statusBox">
+    <div class="status-label">History Database</div>
+    <div class="status-val" id="statusVal">No data loaded</div>
+    <div class="status-sub" id="statusSub">Add one or more CSV files below</div>
+  </div>
+
+  <div id="file-list"></div>
+
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-icon">📂</div>
+    <div class="drop-zone-text">Drop CSV files here</div>
+    <div class="drop-zone-sub">Multiple files merge automatically</div>
+    <input type="file" id="fileInput" accept=".csv" multiple>
+  </div>
+
+  <div class="progress" id="progress">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-text" id="progressText">Processing...</div>
+  </div>
+
+  <!-- Gmail Section -->
+  <div class="section">
+    <div class="section-label"><span>📧</span> Gmail — Rate Confirmations</div>
+
+    <div class="gmail-row">
+      <input class="gmail-input" id="gmailInput" placeholder="Paste Gmail URL or type your email">
+      <button class="gmail-save" id="gmailSave">Save</button>
+    </div>
+
+    <div class="acct-row">
+      <span class="acct-label">Account #</span>
+      <div class="acct-btns" id="acctBtns">
+        <button class="acct-btn" data-idx="0">0</button>
+        <button class="acct-btn" data-idx="1">1</button>
+        <button class="acct-btn" data-idx="2">2</button>
+        <button class="acct-btn" data-idx="3">3</button>
+        <button class="acct-btn" data-idx="4">4</button>
+      </div>
+    </div>
+
+    <div class="gmail-hint">
+      Open your freight Gmail → check the URL:<br>
+      mail.google.com/mail/<strong>u/1</strong>/ → pick <strong>1</strong>
+    </div>
+
+    <div class="gmail-status unset" id="gmailStatus">Not configured yet</div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-title">Highlight Guide</div>
+    <div class="legend-row"><div class="sw p"></div>Same lane + same broker — call immediately</div>
+    <div class="legend-row"><div class="sw g"></div>Same lane — ran 3+ times</div>
+    <div class="legend-row"><div class="sw y"></div>Same lane — ran 1–2 times</div>
+    <div class="legend-row"><div class="sw b"></div>Same pickup city + state</div>
+  </div>
+
+  <!-- Sender Email Section -->
+  <div class="section">
+    <div class="section-label"><span>✉️</span> Send From — Outbound Email</div>
+    <div class="gmail-row">
+      <input class="gmail-input" id="senderInput" placeholder="Paste Gmail URL or your@gmail.com">
+      <button class="gmail-save" id="senderSave">Save</button>
+    </div>
+    <div class="acct-row" style="margin-top:8px">
+      <span class="acct-label">Account #</span>
+      <div class="acct-btns" id="senderAcctBtns">
+        <button class="acct-btn" data-idx="0">0</button>
+        <button class="acct-btn" data-idx="1">1</button>
+        <button class="acct-btn" data-idx="2">2</button>
+        <button class="acct-btn" data-idx="3">3</button>
+        <button class="acct-btn" data-idx="4">4</button>
+      </div>
+    </div>
+    <div class="gmail-hint">Open your outbound Gmail → check URL for account number</div>
+    <div class="gmail-status unset" id="senderStatus">Not set</div>
+  </div>
+
+  <!-- Your Info Section -->
+  <div class="section">
+    <div class="section-label"><span>👤</span> Your Info</div>
+    <div class="gmail-row">
+      <input class="gmail-input" id="userNameInput" placeholder="Your name (e.g. Maria)">
+      <input class="gmail-input" id="userCompanyInput" placeholder="Company name" style="margin-left:6px">
+    </div>
+    <button class="gmail-save" id="userInfoSave">Save</button>
+    <div class="gmail-status unset" id="userInfoStatus">Used in email signatures</div>
+  </div>
+
+  <!-- Email Template Section -->
+  <div class="section">
+    <div class="section-label"><span>📝</span> Load Inquiry Email Template</div>
+    <input class="gmail-input" id="subjectInput" placeholder="Email subject line" style="width:100%;margin-bottom:7px" onfocus="this.style.background='rgba(0,0,0,.07)';this.style.boxShadow='0 0 0 3px rgba(0,122,255,.18)'" onblur="this.style.background='rgba(0,0,0,.05)';this.style.boxShadow='none'">
+    <textarea id="templateInput" style="width:100%;height:110px;background:rgba(0,0,0,.05);border:none;border-radius:9px;color:#1d1d1f;font-size:12px;padding:9px 11px;font-family:inherit;resize:vertical;outline:none;line-height:1.6;transition:background .15s,box-shadow .15s" placeholder="Write your default email template here..." onfocus="this.style.background='rgba(0,0,0,.07)';this.style.boxShadow='0 0 0 3px rgba(0,122,255,.18)'" onblur="this.style.background='rgba(0,0,0,.05)';this.style.boxShadow='none'"></textarea>
+    <div style="font-size:10px;color:#aeaeb2;margin-top:6px;line-height:1.6">Use <strong style="color:#F59E0B">{origin}</strong>, <strong style="color:#F59E0B">{destination}</strong>, <strong style="color:#F59E0B">{name}</strong>, and <strong style="color:#F59E0B">{company}</strong> — filled in automatically.</div>
+    <button class="gmail-save" id="templateSave" style="margin-top:8px">Save Template</button>
+    <div class="gmail-status unset" id="templateStatus">Using default template</div>
+  </div>
+
+  <!-- Google Maps API Key -->
+  <div class="section">
+    <div class="section-label"><span>🗺</span> Google Maps API Key</div>
+    <div class="gmail-row">
+      <input class="gmail-input" id="mapsKeyInput" placeholder="Paste Distance Matrix API key">
+      <button class="gmail-save" id="mapsKeySave">Save</button>
+    </div>
+    <div class="gmail-hint">Required for the RPM calculator on DAT rows.<br>
+      Enable the <strong>Distance Matrix API</strong> in Google Cloud Console.</div>
+    <div class="gmail-status unset" id="mapsKeyStatus">Not configured — RPM button shows prompt</div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn" id="reloadBtn">↺ Reload DAT tabs</button>
+    <button class="btn danger" id="clearBtn">✕ Clear all data</button>
+  </div>
+  <div class="error" id="errorMsg"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'">
+  <title>LaneIQ</title>
+  <link rel="stylesheet" href="content.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+      background: #f5f5f7; }
+
+    /* Full-window flex column — mirrors #dlm-panel layout without fixed positioning */
+    #dlm-wrap { display: flex; flex-direction: column; height: 100vh; }
+
+    /* Reuse panel header style; override grab cursor — OS window handles drag */
+    #dlm-panel-hdr { cursor: default; flex-shrink: 0; }
+    #dlm-panel-hdr:active { cursor: default; }
+
+    /* Search bar flush to header */
+    #dlm-search-wrap { flex-shrink: 0; }
+
+    /* Body fills remaining height */
+    #dlm-body { flex: 1; min-height: 0; }
+
+    /* Live-update flash */
+    @keyframes dlm-refresh { 0%{background:#f0fdf4} 100%{background:#f5f5f7} }
+    #dlm-body.dlm-refreshed { animation: dlm-refresh .6s ease; }
+
+    /* Header button group */
+    .dlm-hdr-btns { display:flex; align-items:center; gap:1px; }
+
+    /* Search icon */
+    .dlm-search-icon { color:#4b5563; font-size:13px; flex-shrink:0; line-height:1; }
+
+    /* Initial loading placeholder */
+    .dlm-placeholder { text-align:center; padding:36px 20px; color:#aeaeb2; font-size:13px; line-height:1.6; }
+  </style>
+</head>
+<body>
+  <div id="dlm-wrap">
+    <div id="dlm-panel-hdr">
+      <span id="dlm-title">◈ LANE HISTORY</span>
+      <div class="dlm-hdr-btns">
+        <button id="dlm-close" title="Close window">✕</button>
+      </div>
+    </div>
+
+    <div id="dlm-search-wrap">
+      <span class="dlm-search-icon">⌕</span>
+      <input id="dlm-search" type="text" placeholder="Search origin, destination, broker…"
+             autocomplete="off" spellcheck="false">
+      <button id="dlm-search-clear" title="Clear search">✕</button>
+    </div>
+
+    <div id="dlm-body">
+      <div class="dlm-placeholder">Loading…</div>
+    </div>
+  </div>
+  <script src="panel.js"></script>
+</body>
+</html>
