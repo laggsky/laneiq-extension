@@ -1,3 +1,7 @@
+// Bump this when normKey or index key format changes — forces a re-upload prompt
+// on any stored index that was built with an older format.
+const INDEX_VERSION = 2;
+
 // ─── CSV Parser ───────────────────────────────────────────────────────────────
 function parseCSV(text) {
   // Split into logical rows respecting quoted fields that contain embedded newlines.
@@ -72,7 +76,9 @@ function getState(raw) {
 // that "Columbia, MO" and "Columbia, PA" land in separate index buckets.
 // e.g. "S San Frncsco, CA" → "san francisco, ca"
 function normKey(raw) {
-  const st   = getState(raw);   // extract state from raw before norm() strips it
+  // Extract state case-insensitively (CSV may emit "MO", "mo", or "Mo")
+  const stMatch = String(raw).match(/([A-Za-z]{2})\s*$/);
+  const st   = stMatch ? stMatch[1].toLowerCase() : '';
   const city = norm(raw);       // normalize city (abbreviations, punctuation, etc.)
   return st ? city + ', ' + st : city;
 }
@@ -257,7 +263,7 @@ function renderFileList(files) {
       const newMeta = meta.filter((_, i) => i !== idx);
       const count   = countFromIndex(odIdx);
 
-      await chrome.storage.local.set({ filesMeta: newMeta, odIndex: odIdx, oIndex: oIdx, brokerIndex: brkIdx, laneCount: count });
+      await chrome.storage.local.set({ filesMeta: newMeta, odIndex: odIdx, oIndex: oIdx, brokerIndex: brkIdx, laneCount: count, indexVersion: INDEX_VERSION });
       renderFileList(newMeta);
 
       if (!newMeta.length) {
@@ -295,28 +301,31 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.getElementById('statusVal').textContent = 'Loading…';
   document.getElementById('statusSub').textContent = 'Reading saved data';
 
-  const stored = await chrome.storage.local.get(['laneCount','filesMeta','gmailEmail','gmailIndex','senderEmail','senderGmailIndex','emailTemplate','userName','userCompany','mapsApiKey','emailSubject','odIndex']);
+  const stored = await chrome.storage.local.get(['laneCount','filesMeta','gmailEmail','gmailIndex','senderEmail','senderGmailIndex','emailTemplate','userName','userCompany','mapsApiKey','emailSubject','odIndex','indexVersion']);
 
-  // ── Detect stale index built from company names instead of city names ────────
-  // A city key looks like "sacramento|los angeles" (1-3 words per side).
-  // A company key looks like "aalberts integrated piping sys|pittston" (4+ words).
-  // If 2+ of the first 5 keys look like company names, auto-clear and prompt re-upload.
-  if (stored.odIndex) {
+  // ── Version check — clear index if it was built with an older normKey ────────
+  const SETTINGS_KEYS = ['gmailEmail','gmailIndex','senderEmail','senderGmailIndex','emailTemplate','userName','userCompany','mapsApiKey','emailSubject'];
+  async function clearIndexKeepSettings(reason) {
+    console.warn('[LaneIQ] ⚠ Clearing stale index:', reason);
+    const keep = await chrome.storage.local.get(SETTINGS_KEYS);
+    await chrome.storage.local.clear();
+    if (Object.keys(keep).length) await chrome.storage.local.set(keep);
+    document.getElementById('statusBox').className = 'status-box';
+    document.getElementById('statusVal').textContent = '⚠ Index format changed — re-upload your CSV files';
+    document.getElementById('statusSub').textContent = reason;
+    document.getElementById('file-list').innerHTML = '';
+  }
+
+  if (stored.laneCount && stored.indexVersion !== INDEX_VERSION) {
+    await clearIndexKeepSettings('Key format updated (city+state) — previous index used city-only keys');
+  } else if (stored.odIndex) {
+    // ── Detect stale index built from company names instead of city names ──────
     const sample = Object.keys(stored.odIndex).slice(0, 5);
     const badCount = sample.filter(k => k.split('|')[0].trim().split(/\s+/).length > 3).length;
     if (badCount >= 2) {
-      console.warn('[LaneIQ] ⚠ Stale index detected — keys look like company names, not cities.');
-      console.log('[LaneIQ] Bad sample keys:', sample);
-      const keep = await chrome.storage.local.get(['gmailEmail','gmailIndex','senderEmail','senderGmailIndex','emailTemplate','userName','userCompany','mapsApiKey','emailSubject']);
-      await chrome.storage.local.clear();
-      if (Object.keys(keep).length) await chrome.storage.local.set(keep);
-      console.log('[LaneIQ] ✓ Storage cleared. Please re-upload your CSV files.');
-      document.getElementById('statusBox').className = 'status-box';
-      document.getElementById('statusVal').textContent = '⚠ Old data cleared — re-upload your CSV files';
-      document.getElementById('statusSub').textContent = 'Previous index had company names instead of cities';
-      document.getElementById('file-list').innerHTML = '';
+      await clearIndexKeepSettings('Previous index had company names instead of cities');
     } else {
-      console.log('[LaneIQ] ✓ Index format OK. Sample keys:', sample);
+      console.log('[LaneIQ] ✓ Index format OK (v' + stored.indexVersion + '). Sample keys:', sample);
       updateStatus(stored.laneCount, stored.filesMeta.length);
       renderFileList(stored.filesMeta);
     }
@@ -608,12 +617,13 @@ Thanks,
       setProgress(88, 'Saving to storage...');
       try {
         await chrome.storage.local.set({
-          filesMeta:   combinedMeta,
-          odIndex:     existingOD,
-          oIndex:      existingO,
-          brokerIndex: existingBroker,
-          laneCount:   totalCount,
-          loadedAt:    new Date().toISOString(),
+          filesMeta:    combinedMeta,
+          odIndex:      existingOD,
+          oIndex:       existingO,
+          brokerIndex:  existingBroker,
+          laneCount:    totalCount,
+          indexVersion: INDEX_VERSION,
+          loadedAt:     new Date().toISOString(),
         });
       } catch (storageErr) {
         progress.style.display = 'none';

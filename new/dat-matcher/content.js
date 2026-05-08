@@ -1,6 +1,10 @@
 (function() {
   'use strict';
 
+  // Must match INDEX_VERSION in popup.js — if the stored index was built with
+  // an older version, content.js will refuse to load it (treats it as empty).
+  const INDEX_VERSION = 2;
+
   // ── State ───────────────────────────────────────────────────────────────────
   let odIndex = null, oIndex = null, brokerIndex = null;
   let senderEmail = '', emailSubject = '', emailTemplate = '', senderGmailIndex = 0;
@@ -8,6 +12,7 @@
   let gmailIndex = 0;
   let panel = null;
   let panelBodyHTML = '';
+  let _clearPanelTimer;
   let isDragging = false, dragOffX = 0, dragOffY = 0;
   let isResizing = false, resizeRightEdge = 0, resizeCorner = false;
   let _dlmT;
@@ -63,9 +68,15 @@
   // Build an index key that normalizes the city name but preserves the state so
   // that "Columbia, MO" and "Columbia, PA" land in separate index buckets.
   // e.g. "S San Frncsco, CA" → "san francisco, ca"
+  // Strips any text after the state abbreviation (e.g. badge "✓ 1x" injected
+  // by the extension) so lookup keys are never poisoned by UI text.
   function normKey(raw) {
-    const st   = getState(raw);   // extract state from raw before norm() strips it
-    const city = norm(raw);       // normalize city (abbreviations, punctuation, etc.)
+    // Keep everything up to and including ", ST" — drop trailing badge/junk
+    const clean = String(raw).replace(/(,\s*[A-Za-z]{2})\b.*$/, '$1').trim();
+    // Extract state case-insensitively (CSV/DAT may emit "MO", "mo", or "Mo")
+    const stMatch = clean.match(/([A-Za-z]{2})\s*$/);
+    const st   = stMatch ? stMatch[1].toLowerCase() : '';
+    const city = norm(clean);
     return st ? city + ', ' + st : city;
   }
 
@@ -91,10 +102,13 @@
   // buckets. The post-filter below is kept as a safety net for edge cases
   // where state data is missing from either DAT or the CSV.
   function findOD(origin, dest) {
-    if (!odIndex) return [];
+    console.log('[LaneIQ DEBUG] findOD CALLED →', { origin, dest, odIndexNull: !odIndex, odIndexKeys: odIndex ? Object.keys(odIndex).length : 'N/A' });
+    if (!odIndex) { console.log('[LaneIQ DEBUG] findOD: odIndex is null'); return []; }
     const no = normKey(origin), nd = normKey(dest);
+    const key = no + '|' + nd;
+    console.log('[LaneIQ DEBUG] findOD lookup →', { origin, dest, normKeyOrigin: no, normKeyDest: nd, key, hit: !!odIndex[key], hitCount: (odIndex[key] || []).length });
     if (!no || !nd) return [];
-    const recs = odIndex[no + '|' + nd] || [];
+    const recs = odIndex[key] || [];
     if (!recs.length) return [];
     const so = getState(origin);
     const sd = getState(dest);
@@ -109,8 +123,10 @@ if (so && ro && so !== ro) return false;
   }
 
   function findO(origin) {
-    if (!oIndex) return [];
+    console.log('[LaneIQ DEBUG] findO CALLED →', { origin, oIndexNull: !oIndex, oIndexKeys: oIndex ? Object.keys(oIndex).length : 'N/A' });
+    if (!oIndex) { console.log('[LaneIQ DEBUG] findO: oIndex is null'); return []; }
     const no = normKey(origin);
+    console.log('[LaneIQ DEBUG] findO lookup →', { origin, normKeyOrigin: no, hit: !!oIndex[no], hitCount: (oIndex[no] || []).length });
     if (!no) return [];
     const recs = oIndex[no] || [];
     if (!recs.length) return [];
@@ -274,20 +290,17 @@ if (so && ro && so !== ro) return false;
     return filtered[0] || '';
   }
 
-  // ── Toast notification ────────────────────────────────────────────────────
-  function showToast(msg) {
-    const old = document.getElementById('dlm-toast');
-    if (old) old.remove();
-    const t = document.createElement('div');
-    t.id = 'dlm-toast';
-    const span = document.createElement('span');
-    span.textContent = msg;
-    const btn = document.createElement('button');
-    btn.title = 'Dismiss'; btn.textContent = '✕';
-    btn.addEventListener('click', () => t.remove());
-    t.append(span, btn);
-    document.body.appendChild(t);
-    setTimeout(() => { if (t.parentElement) t.remove(); }, 3000);
+  // ── Chip "Sent ✓" flash ───────────────────────────────────────────────────
+  function flashChipSent(chip) {
+    const origText = chip.textContent;
+    const origBg   = chip.style.getPropertyValue('background');
+    const origPrio = chip.style.getPropertyPriority('background');
+    chip.textContent = 'Sent ✓';
+    chip.style.setProperty('background', '#059669', 'important');
+    setTimeout(() => {
+      chip.textContent = origText;
+      chip.style.setProperty('background', origBg || '', origPrio || '');
+    }, 2000);
   }
 
   // ── RPM result tooltip ────────────────────────────────────────────────────
@@ -337,7 +350,7 @@ if (so && ro && so !== ro) return false;
     const onClick = e => {
       e.stopPropagation(); e.preventDefault();
       sendEmail(email, origin, dest || 'destination');
-      showToast(`Email sent to ${email}`);
+      flashChipSent(e.currentTarget);
     };
 
     // ── Case 1: email is already in a mailto anchor — style it directly ───────
@@ -433,11 +446,19 @@ if (so && ro && so !== ro) return false;
   function processRow(row) {
     if (!row || row.offsetWidth < 100) return;
 
-    const { origin, dest } = getCities(row);
+    let { origin, dest } = getCities(row);
+    // Strip any text after the state code — the extension's own badge ("✓ 1x")
+    // gets appended inside the origin element and would otherwise poison both
+    // the skip-guard comparison and the normKey lookup.
+    origin = origin.replace(/(,\s*[A-Z]{2})\b.*$/, '$1').trim();
+    if (dest) dest = dest.replace(/(,\s*[A-Z]{2})\b.*$/, '$1').trim();
+    console.log('[LaneIQ DEBUG] processRow extracted →', { origin, dest });
     if (!origin || origin.length < 3) return;
 
     // Skip rows whose city data hasn't changed since the last scan — this is
     // the main guard against redundant matching on unchanged visible rows.
+    // NOTE: only stamped after a successful match, so unmatched rows never
+    // trigger this guard and are retried on every scan until indexes are ready.
     if (row.dataset.dlmOrigin === origin && row.dataset.dlmDest === (dest || '')) return;
 
     // Row is new or DAT reused the element for different data — clear stale state.
@@ -447,10 +468,13 @@ if (so && ro && so !== ro) return false;
     row.querySelectorAll('.dlm-badge-host').forEach(el => el.classList.remove('dlm-badge-host'));
     delete row.dataset.dlmChip; // let injectEmailChip re-run for the new row content
 
-    // Always stamp city data before any early return so getDetailCities works
-    // on every row, including unmatched ones (needed for RPM/Maps button).
-    row.dataset.dlmOrigin = origin;
-    row.dataset.dlmDest   = dest || '';
+    // If indexes aren't loaded yet, leave the row unstamped so the next scan
+    // retries it. Stamping before indexes are ready would lock the row out
+    // of the skip-guard above, making it permanently invisible to matching.
+    if (!odIndex || Object.keys(odIndex).length === 0) {
+      console.log('[LaneIQ DEBUG] processRow: odIndex not ready yet — will retry on next scan for', origin);
+      return;
+    }
 
     const datBroker = getBroker(row);
     const odM = dest ? findOD(origin, dest) : [];
@@ -458,6 +482,11 @@ if (so && ro && so !== ro) return false;
     const bM  = datBroker ? findBroker(datBroker, origin) : [];
 
     if (!odM.length && !oM.length && !bM.length) return;
+
+    // Only stamp origin/dest after a confirmed match — keeps the row eligible
+    // for retry on future scans if this pass found nothing.
+    row.dataset.dlmOrigin = origin;
+    row.dataset.dlmDest   = dest || '';
 
     // Determine tier
     // 🟣 PURPLE = same origin + destination + same broker
@@ -486,6 +515,8 @@ if (so && ro && so !== ro) return false;
     }
 
     row.classList.add(cls);
+    console.log('[LaneIQ DEBUG] applied', cls, 'to row — classList now:', row.className);
+    setTimeout(() => console.log('[LaneIQ DEBUG] row still in DOM?', row.isConnected, '— className now:', row.className), 500);
 
     // Add badge — append to origin container (never inside .truncate, which clips long city names)
     if (badgeTxt) {
@@ -500,6 +531,21 @@ if (so && ro && so !== ro) return false;
     }
 
     row.dataset.dlmBroker = datBroker || '';
+
+    // Re-attach click listener every time this row element is processed.
+    // DAT re-renders row elements on click (React reconciliation), so a fresh
+    // DOM node loses any previously attached listener. dlmBound guards against
+    // duplicate listeners on the same element instance.
+    if (!row.dataset.dlmBound) {
+      row.dataset.dlmBound = '1';
+      row.addEventListener('click', e => {
+        // Panel opening is handled solely by flushExpand (addedNodes MutationObserver
+        // path) so that it only fires on row-open, not on row-close. Calling showPanel
+        // here would fire on both clicks (open and close), reopening the panel when
+        // the user is trying to collapse a row.
+        console.log('[LaneIQ DEBUG] row clicked — classes:', row.className);
+      });
+    }
   }
 
   // ── Search ───────────────────────────────────────────────────────────────────
@@ -673,6 +719,17 @@ if (so && ro && so !== ro) return false;
     return d;
   }
 
+  function clearPanel() {
+    panelBodyHTML = '';
+    clearTimeout(_clearPanelTimer);
+    if (!panel) return;
+    const bodyEl = document.getElementById('dlm-body');
+    if (bodyEl) bodyEl.innerHTML = '';
+    const titleEl = panel.querySelector('#dlm-title');
+    if (titleEl) titleEl.innerHTML = '◈ LaneIQ<small> · drag</small>';
+    if (!panelPopped) panel.style.display = 'none';
+  }
+
   function showPanel(origin, dest, odM, oM, bM, datBroker) {
     // Only persist state when the pop-out window is actually open — avoids a
     // large storage write (full match arrays) on every row click otherwise.
@@ -809,12 +866,25 @@ if (so && ro && so !== ro) return false;
   async function init() {
     if (_initialized) return; // indexes already in memory — nothing to do
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','gmailIndex','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate']);
+    console.log('[LaneIQ DEBUG] storage.get result →', {
+      laneCount:    s.laneCount,
+      indexVersion: s.indexVersion,
+      odIndexKeys:  s.odIndex && typeof s.odIndex === 'object' ? Object.keys(s.odIndex).length : 'N/A',
+      odSampleKey:  s.odIndex && typeof s.odIndex === 'object' ? Object.keys(s.odIndex).slice(0, 3) : 'N/A',
+      oIndexKeys:   s.oIndex  && typeof s.oIndex  === 'object' ? Object.keys(s.oIndex).length  : 'N/A',
+      oSampleKey:   s.oIndex  && typeof s.oIndex  === 'object' ? Object.keys(s.oIndex).slice(0, 3)  : 'N/A',
+    });
     if (!s.laneCount) return;
+    if (s.indexVersion !== INDEX_VERSION) {
+      console.warn('[LaneIQ] Stored index version', s.indexVersion, '!== current', INDEX_VERSION, '— skipping stale index. Re-upload CSV in the extension popup.');
+      return;
+    }
 
     odIndex     = s.odIndex     || {};
     oIndex      = s.oIndex      || {};
     brokerIndex = s.brokerIndex || {};
+    console.log('[LaneIQ DEBUG] indexes assigned →', { odIndexKeys: Object.keys(odIndex).length, oIndexKeys: Object.keys(oIndex).length });
     const _sampleRecs = Object.values(oIndex).flat().slice(0, 3);
     console.log('[LaneIQ] Index sample records (raw stored shape):');
     _sampleRecs.forEach((r, i) => console.log(`  [${i}]`, JSON.stringify(r)));
@@ -1056,50 +1126,57 @@ Thanks,
     let _expandTimer;
 
     function flushExpand() {
+      console.log('[LaneIQ DEBUG] flushExpand fired — pending nodes:', _pendingExpand.size);
       for (const node of _pendingExpand) {
         if (!node.isConnected || node.closest('[id^="dlm-"]')) continue;
         if (node.dataset.dlmExpandSeen) continue;
 
-        // Walk back through siblings and ancestor-siblings to find the highlighted
-        // row (stamped with data-dlm-origin by processRow) that owns this detail panel.
+        const cls = (node.className || '').toLowerCase();
+        const isDatDetail = cls.includes('detail') || cls.includes('drawer') || cls.includes('expand');
+
+        // Only check the DIRECT previous sibling — the selected row should
+        // immediately precede its detail element. Walking further back would
+        // match a highlighted row that wasn't actually clicked.
         let row = null;
 
-        // Strategy 1: direct previous siblings of the inserted node
-        let sib = node.previousElementSibling;
-        while (sib && !row) {
-          if (sib.dataset.dlmOrigin) row = sib;
-          else { const r = sib.querySelector?.('[data-dlm-origin]'); if (r) row = r; }
-          sib = sib.previousElementSibling;
+        // Strategy 1: direct previous sibling of the inserted node only
+        const prevSib = node.previousElementSibling;
+        if (prevSib) {
+          if (prevSib.dataset.dlmOrigin) row = prevSib;
+          else { const r = prevSib.querySelector?.('[data-dlm-origin]'); if (r) row = r; }
         }
 
-        // Strategy 2: previous siblings of parent / grandparent (handles wrapper divs)
+        // Strategy 2: previous sibling of parent / grandparent (handles wrapper divs),
+        // max 2 ancestor levels, 1 sibling check each — no unbounded walk.
         if (!row) {
           let ancestor = node.parentElement;
-          for (let depth = 0; depth < 3 && ancestor && !row; depth++) {
-            sib = ancestor.previousElementSibling;
-            while (sib && !row) {
+          for (let depth = 0; depth < 2 && ancestor && !row; depth++) {
+            const sib = ancestor.previousElementSibling;
+            if (sib) {
               if (sib.dataset.dlmOrigin) row = sib;
               else { const r = sib.querySelector?.('[data-dlm-origin]'); if (r) row = r; }
-              sib = sib.previousElementSibling;
             }
             ancestor = ancestor.parentElement;
           }
         }
 
-        if (!row) continue;
         node.dataset.dlmExpandSeen = '1';
 
-        const o = row.dataset.dlmOrigin;
-        const d = row.dataset.dlmDest   || '';
-        const b = row.dataset.dlmBroker || '';
-        if (o) showPanel(o, d, d ? findOD(o, d) : [], findO(o), b ? findBroker(b, o) : [], b);
+        const o = row?.dataset.dlmOrigin;
+        const d = row?.dataset.dlmDest   || '';
+        const b = row?.dataset.dlmBroker || '';
+
+        if (o) {
+          showPanel(o, d, d ? findOD(o, d) : [], findO(o), b ? findBroker(b, o) : [], b);
+        }
+        // If no associated row found, do nothing — panel stays as-is.
       }
       _pendingExpand.clear();
     }
 
     let _rt;
     new MutationObserver(mutations => {
-      for (const { addedNodes } of mutations) {
+      for (const { addedNodes, removedNodes } of mutations) {
         for (const node of addedNodes) {
           if (node.nodeType !== 1) continue;
           if (node.closest?.('[id^="dlm-"]')) continue; // skip our own injected elements
@@ -1107,19 +1184,27 @@ Thanks,
           // Email detection (existing)
           if (EMAIL_SNIFF.test(node.textContent || '')) _pendingEmail.add(node);
 
-          // Queue for expansion detection if the node is directly after a highlighted
-          // row, or has class names suggesting it is a DAT detail/drawer panel.
-          const cls = (node.className || '').toLowerCase();
-          if (cls.includes('detail') || cls.includes('drawer') || cls.includes('expand') ||
-              node.previousElementSibling?.dataset?.dlmOrigin) {
+          // Queue for expansion detection only when the node has class names that
+          // suggest it is a DAT detail/drawer panel. The previous-sibling check
+          // was removed — it matched re-rendered row elements and caused flushExpand
+          // to open the panel for the wrong row on every React reconciliation.
+          const cls = (typeof node.className === 'string'
+            ? node.className
+            : node.className?.baseVal || '').toLowerCase();
+          if (cls.includes('detail') || cls.includes('drawer') || cls.includes('expand')) {
             _pendingExpand.add(node);
           }
         }
+
+        // removedNodes — no action. The panel stays open until the user
+        // explicitly closes it with the X button.
       }
-      // Expansion detection fires at 80 ms — fast enough to feel immediate,
-      // slow enough to let DAT finish its own render pass first.
-      clearTimeout(_expandTimer);
-      _expandTimer = setTimeout(flushExpand, 80);
+      // Only schedule flushExpand when detail-panel nodes were actually queued —
+      // do not fire on removal-only batches or unrelated DOM updates.
+      if (_pendingExpand.size > 0) {
+        clearTimeout(_expandTimer);
+        _expandTimer = setTimeout(flushExpand, 80);
+      }
       clearTimeout(_rt);
       _rt = setTimeout(() => {
         document.querySelectorAll('button,a,[role="button"]').forEach(tryIntercept);
@@ -1179,7 +1264,7 @@ Thanks,
       const onClick = e => {
         e.stopPropagation(); e.preventDefault();
         sendEmail(email, origin, dest || 'destination');
-        showToast(`Email sent to ${email}`);
+        flashChipSent(e.currentTarget);
       };
 
       // Leaf element whose entire text is the email — style it in place
