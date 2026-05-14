@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif; width: 360px; background: #f5f5f7; color: #1d1d1f; padding: 18px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif; width: 420px; overflow-y: visible; background: #f5f5f7; color: #1d1d1f; padding: 12px; }
 
     .header { display:flex; align-items:center; gap:10px; margin-bottom:16px; border-bottom:1px solid rgba(0,0,0,.07); padding-bottom:14px; }
     .dot { width:9px; height:9px; border-radius:50%; background:#F59E0B; flex-shrink:0; }
@@ -42,8 +42,8 @@
     .progress-fill { height:100%; background:#F59E0B; width:0%; transition:width .3s; }
     .progress-text { font-size:10px; color:#aeaeb2; margin-top:5px; text-align:center; }
 
-    .section { background:#fff; border:1px solid rgba(0,0,0,.07); border-radius:12px; padding:14px 16px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04); }
-    .section-label { font-size:9px; color:#aeaeb2; letter-spacing:.06em; text-transform:uppercase; font-weight:600; margin-bottom:11px; display:flex; align-items:center; gap:5px; }
+    .section { background:#fff; border:1px solid rgba(0,0,0,.07); border-radius:12px; padding:12px; margin-bottom:8px; box-shadow:0 1px 4px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04); }
+    .section-label { font-size:10px; color:#aeaeb2; letter-spacing:.06em; text-transform:uppercase; font-weight:600; margin-bottom:6px; display:flex; align-items:center; gap:5px; }
     .section-label span { color:#F59E0B; }
 
     .gmail-row { display:flex; gap:7px; align-items:center; margin-bottom:10px; }
@@ -86,9 +86,47 @@
     .btn:hover { border-color:#F59E0B; color:#F59E0B; }
     .btn.danger:hover { border-color:#ff3b30; color:#ff3b30; }
     .error { color:#ff3b30; font-size:11px; margin-top:9px; display:none; padding:8px 10px; background:rgba(255,59,48,.06); border:1px solid rgba(255,59,48,.2); border-radius:8px; }
+    .license-clear-btn { background:none; border:1px solid rgba(0,0,0,.12); color:#aeaeb2; font-weight:500; padding:7px 10px; transition:border-color .15s,color .15s; }
+    .license-clear-btn:hover { border-color:#ff3b30; color:#ff3b30; }
+
+    .ds-row { display:flex; align-items:center; justify-content:space-between; }
+    .ds-opt { font-size:12px; color:#aeaeb2; font-weight:500; transition:color .15s; }
+    .ds-opt.active { color:#1d1d1f; font-weight:600; }
+    .ds-pill { position:relative; width:52px; height:26px; flex-shrink:0; cursor:pointer; }
+    .ds-pill input { opacity:0; width:0; height:0; position:absolute; }
+    .ds-slider { position:absolute; inset:0; background:#c7c7cc; border-radius:34px; transition:background .2s; }
+    .ds-slider::before { content:''; position:absolute; width:20px; height:20px; left:3px; top:3px; background:#fff; border-radius:50%; transition:transform .2s; box-shadow:0 1px 3px rgba(0,0,0,.25); }
+    .ds-pill input:checked + .ds-slider { background:#F59E0B; }
+    .ds-pill input:checked + .ds-slider::before { transform:translateX(26px); }
   </style>
 </head>
 <body>
+  <div id="activation-screen" style="display:none; flex-direction:column; align-items:center; justify-content:center; padding:40px 28px; min-height:420px; text-align:center;">
+    <div style="font-size:22px; font-weight:700; color:#1a1a1a; letter-spacing:-0.3px; margin-bottom:6px;">⬡ LaneIQ</div>
+    <div style="font-size:13px; color:#6e6e73; margin-bottom:32px; line-height:1.5;">Historical lane intelligence<br>for DAT dispatchers</div>
+
+    <div style="width:100%; margin-bottom:12px;">
+      <input id="activation-key-input" type="text" placeholder="LANEIQ-XXXX-XXXX-XXXX"
+        style="width:100%; box-sizing:border-box; padding:11px 14px; border:1.5px solid #d1d1d6; border-radius:10px; font-size:13px; color:#1a1a1a; outline:none; text-align:center; letter-spacing:0.5px;" />
+    </div>
+
+    <button id="activation-activate-btn"
+      style="width:100%; padding:12px; background:#007aff; color:#fff; border:none; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; margin-bottom:20px;">
+      Activate
+    </button>
+
+    <div id="activation-status" style="font-size:12px; color:#ff3b30; min-height:18px; margin-bottom:20px;"></div>
+
+    <div style="border-top:1px solid #e5e5ea; padding-top:20px; width:100%;">
+      <div style="font-size:12px; color:#6e6e73; margin-bottom:10px;">Don't have a key yet?</div>
+      <a href="https://laneiq.org/#pricing" target="_blank"
+        style="display:block; width:100%; box-sizing:border-box; padding:11px; background:#f2f2f7; border-radius:10px; text-align:center; color:#007aff; font-size:13px; font-weight:600; text-decoration:none; margin-bottom:8px;">
+        Get your license at laneiq.org →
+      </a>
+      <div style="font-size:11px; color:#aeaeb2;">Solo · Pro · Plans from $19/month</div>
+    </div>
+  </div>
+
   <div class="header">
     <div class="dot"></div>
     <div>
@@ -103,7 +141,63 @@
     <div class="status-sub" id="statusSub">Add one or more CSV files below</div>
   </div>
 
+  <!-- License Key -->
+  <div class="section">
+    <div class="section-label"><span>🔑</span> License Key</div>
+    <div class="gmail-row">
+      <input class="gmail-input" id="licenseInput" placeholder="LANEIQ-XXXX-XXXX-XXXX">
+      <button class="gmail-save" id="licenseSave">Activate</button>
+      <button class="license-clear-btn" id="licenseClear">Clear</button>
+    </div>
+    <button class="gmail-save" id="manageSubBtn" style="display:none;width:100%;margin-top:7px">Manage Subscription</button>
+    <div class="gmail-status unset" id="licenseStatus">Enter your license key to activate LaneIQ</div>
+  </div>
+
+  <!-- Data Source (Pro only — hidden for Solo) -->
+  <div class="section" id="dataSourceSection" style="display:none">
+    <div class="section-label"><span>📡</span> Data Source</div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:6px">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:13px;font-weight:500;color:#34c759">My CSV</div>
+          <div style="font-size:11px;color:#aaaaaa">Your own freight history</div>
+        </div>
+        <label class="ds-pill">
+          <input type="checkbox" id="useCSVToggle">
+          <span class="ds-slider"></span>
+        </label>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:13px;font-weight:500;color:#34c759">LaneIQ Database</div>
+          <div style="font-size:11px;color:#aaaaaa">LaneIQ Database PRO</div>
+        </div>
+        <label class="ds-pill">
+          <input type="checkbox" id="useDBToggle">
+          <span class="ds-slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="gmail-status unset" id="dataSourceStatus" style="margin-top:8px"></div>
+  </div>
+
   <div id="file-list"></div>
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
+    <span style="font-size:9px;color:#aeaeb2;letter-spacing:.06em;text-transform:uppercase;font-weight:600">Your Freight History</span>
+    <span id="csvHelpToggle" style="font-size:10px;color:#007aff;cursor:pointer;font-weight:500">How to prepare your data?</span>
+  </div>
+  <div id="csvHelpNote" style="display:none;font-size:11px;color:#6e6e73;background:rgba(0,122,255,.06);border:1px solid rgba(0,122,255,.15);border-radius:8px;padding:10px 12px;margin-bottom:9px;line-height:1.7">
+    <strong style="color:#1d1d1f;font-size:10px;letter-spacing:.04em;text-transform:uppercase">Required</strong><br>
+    Origin — or: PickCity, Origin City, From City<br>
+    Destination — or: DropCity, Destination City, To City<br>
+    <br>
+    <strong style="color:#1d1d1f;font-size:10px;letter-spacing:.04em;text-transform:uppercase">Optional</strong><br>
+    Rate · Broker · Weight · Date · Commodity · Load #<br>
+    <br>
+    <span style="color:#aeaeb2">Extra columns are ignored. Column order doesn't matter.<br>Save as .csv before uploading.</span><br>
+    <a id="howItWorksLink" href="#" style="color:#007aff;text-decoration:none;font-weight:500;font-size:11px">How it works →</a>
+  </div>
 
   <div class="drop-zone" id="dropZone">
     <div class="drop-zone-icon">📂</div>
@@ -188,8 +282,8 @@
   <!-- Email Template Section -->
   <div class="section">
     <div class="section-label"><span>📝</span> Load Inquiry Email Template</div>
-    <input class="gmail-input" id="subjectInput" placeholder="Email subject line" style="width:100%;margin-bottom:7px" onfocus="this.style.background='rgba(0,0,0,.07)';this.style.boxShadow='0 0 0 3px rgba(0,122,255,.18)'" onblur="this.style.background='rgba(0,0,0,.05)';this.style.boxShadow='none'">
-    <textarea id="templateInput" style="width:100%;height:110px;background:rgba(0,0,0,.05);border:none;border-radius:9px;color:#1d1d1f;font-size:12px;padding:9px 11px;font-family:inherit;resize:vertical;outline:none;line-height:1.6;transition:background .15s,box-shadow .15s" placeholder="Write your default email template here..." onfocus="this.style.background='rgba(0,0,0,.07)';this.style.boxShadow='0 0 0 3px rgba(0,122,255,.18)'" onblur="this.style.background='rgba(0,0,0,.05)';this.style.boxShadow='none'"></textarea>
+    <input class="gmail-input" id="subjectInput" placeholder="Email subject line" style="width:100%;margin-bottom:7px;color:#444444" onfocus="this.style.background='rgba(0,0,0,.07)';this.style.boxShadow='0 0 0 3px rgba(0,122,255,.18)'" onblur="this.style.background='rgba(0,0,0,.05)';this.style.boxShadow='none'">
+    <textarea id="templateInput" style="width:100%;height:110px;background:rgba(0,0,0,.05);border:none;border-radius:9px;color:#444444;font-size:12px;padding:9px 11px;font-family:inherit;resize:vertical;outline:none;line-height:1.6;transition:background .15s,box-shadow .15s" placeholder="Write your default email template here..." onfocus="this.style.background='rgba(0,0,0,.07)';this.style.boxShadow='0 0 0 3px rgba(0,122,255,.18)'" onblur="this.style.background='rgba(0,0,0,.05)';this.style.boxShadow='none'"></textarea>
     <div style="font-size:10px;color:#aeaeb2;margin-top:6px;line-height:1.6">Use <strong style="color:#F59E0B">{origin}</strong>, <strong style="color:#F59E0B">{destination}</strong>, <strong style="color:#F59E0B">{name}</strong>, and <strong style="color:#F59E0B">{company}</strong> — filled in automatically.</div>
     <button class="gmail-save" id="templateSave" style="margin-top:8px">Save Template</button>
     <div class="gmail-status unset" id="templateStatus">Using default template</div>
@@ -197,7 +291,14 @@
 
   <!-- Google Maps API Key -->
   <div class="section">
-    <div class="section-label"><span>🗺</span> Google Maps API Key</div>
+    <div class="section-label" style="justify-content:space-between">
+      <span style="display:flex;align-items:center;gap:5px"><span>🗺</span> Google Maps API Key</span>
+      <span id="mapsHelpToggle" style="font-size:10px;color:#007aff;cursor:pointer;font-weight:500;letter-spacing:0">Need a key?</span>
+    </div>
+    <div id="mapsHelpNote" style="display:none;font-size:11px;color:#6e6e73;background:rgba(0,122,255,.06);border:1px solid rgba(0,122,255,.15);border-radius:8px;padding:8px 10px;margin-bottom:9px;line-height:1.6">
+      Get one free at Google Cloud — takes 2 minutes.<br>
+      <a href="https://laneiq.org/setup" target="_blank" style="color:#007aff;text-decoration:none;font-weight:500">laneiq.org/setup →</a>
+    </div>
     <div class="gmail-row">
       <input class="gmail-input" id="mapsKeyInput" placeholder="Paste Distance Matrix API key">
       <button class="gmail-save" id="mapsKeySave">Save</button>
@@ -212,6 +313,10 @@
     <button class="btn danger" id="clearBtn">✕ Clear all data</button>
   </div>
   <div class="error" id="errorMsg"></div>
+
+  <div style="text-align:center;margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,.06)">
+    <a href="#" id="setupHelpLink" style="font-size:11px;color:#6e6e73;text-decoration:none;font-weight:500;cursor:pointer">Setup Help →</a>
+  </div>
 
   <script src="popup.js"></script>
 </body>

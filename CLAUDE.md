@@ -8,7 +8,7 @@ A Chrome extension (Manifest V3) that highlights loads on the DAT load board tha
 LaneIQ project/
 ├── CLAUDE.md                          ← you are here
 ├── new/dat-matcher/                   ← active extension source
-│   ├── manifest.json                  ← extension config, version 1.5
+│   ├── manifest.json                  ← extension config, version 1.9
 │   ├── popup.html / popup.js          ← settings UI (CSV upload, Gmail, template)
 │   ├── content.js                     ← injected into DAT pages, does all matching
 │   └── content.css                    ← sidebar + highlight styles
@@ -16,7 +16,7 @@ LaneIQ project/
 ├── Sac_history_part2_clean.csv
 ├── Sacramento Loads. Sunrise Logistics. Original.xlsx
 ├── Sacramento history.xlsx
-└── DAT-Lane-Matcher-Extension_LAST VERSION.zip  ← previous stable build
+└── LaneIQ-v1.9.zip                    ← previous stable build (on Desktop)
 ```
 
 ## How the Extension Works
@@ -31,7 +31,7 @@ LaneIQ project/
 5. Gmail button opens rate confirmation search in the configured Gmail account
 
 ## Key Technical Details
-- Manifest V3, no background service worker needed
+- Manifest V3
 - All data stays in browser (`chrome.storage.local`) — never sent to a server
 - City matching uses fuzzy normalization (`norm()` function in content.js) — strips state abbreviations, numbers, punctuation before comparing
 - Broker matching via `normBroker()` — strips generic words (logistics, freight, inc, llc) before comparing
@@ -51,9 +51,12 @@ LaneIQ project/
 - **Planned backend:** Railway (for license key validation in Phase 2)
 - **Phase 2 features:** Gmail API for in-panel PDF preview, cloud email parser, DAT Connect API integration
 
+## Working Directory
+All file edits default to: /Users/alex/Desktop/LaneIQ-project  2.0/new/dat-matcher/
+Note: folder name has TWO spaces — "LaneIQ-project  2.0" not one.
+
 ## Open Questions / Known Issues
 - DAT occasionally changes their DOM structure — content.js selectors may need updating when this happens
-- DAT ToS review needed before public commercialization (does selling a tool that runs on their page require permission?)
 - Product name "LaneIQ" is provisional
 
 ## Working With Claude
@@ -78,3 +81,51 @@ Key routing rules:
 - Ship/deploy/PR → invoke /ship or /land-and-deploy
 - Save progress → invoke /context-save
 - Resume context → invoke /context-restore
+
+## GBrain Search Guidance (configured by /sync-gbrain)
+<!-- gstack-gbrain-search-guidance:start -->
+
+GBrain is set up and synced on this machine. The agent should prefer gbrain
+over Grep when the question is semantic or when you don't know the exact
+identifier yet.
+
+**This worktree is pinned to a worktree-scoped code source** via the
+`.gbrain-source` file in the repo root (kubectl-style context). Any
+`gbrain code-def`, `code-refs`, `code-callers`, `code-callees`, or `query`
+call from anywhere under this worktree routes to that source by default —
+no `--source` flag needed. Conductor sibling worktrees of the same repo
+each have their own pin and their own indexed pages, so semantic results
+match the actual code on disk in this worktree.
+
+Two indexed corpora available via the `gbrain` CLI:
+- This worktree's code (auto-pinned via `.gbrain-source`).
+- `~/.gstack/` curated memory (registered as `gstack-brain-<user>` source via
+  the existing federation pipeline).
+
+Prefer gbrain when:
+- "Where is X handled?" / semantic intent, no exact string yet:
+    `gbrain search "<terms>"` or `gbrain query "<question>"`
+- "Where is symbol Y defined?" / symbol-based code questions:
+    `gbrain code-def <symbol>` or `gbrain code-refs <symbol>`
+- "What calls Y?" / "What does Y depend on?":
+    `gbrain code-callers <symbol>` / `gbrain code-callees <symbol>`
+- "What did we decide last time?" / past plans, retros, learnings:
+    `gbrain search "<terms>" --source gstack-brain-<user>`
+
+Grep is still right for known exact strings, regex, multiline patterns, and
+file globs. Run `/sync-gbrain` after meaningful code changes; for ongoing
+auto-sync across all worktrees, run `gbrain autopilot --install` once per
+machine — gbrain's daemon handles incremental refresh on a schedule.
+
+<!-- gstack-gbrain-search-guidance:end -->
+
+## Session Notes — May 13 2026
+- panelPopped stuck state fixed — resets to false on every content script init
+- DAT class rename handled — MutationObserver now checks both details-container and dat-load-details
+- Silent license re-validation added to popup.js on every popup open
+- Two email injection systems exist in content.js — injectEmailChip() at line ~351 and inline block at line ~1795 — always check both when debugging email chip issues
+- Email chip cities fixed — getDetailCities called fresh on click, not captured at injection time
+- View Route + RPM/Maps + Google Maps buttons now stacked in expanded DAT row
+- Google Maps button includes deadhead (DAT search origin) + load origin + destination
+- Stripe Customer Portal wired up — Manage Subscription button in popup
+- v1.9 submitted to Chrome Store May 13 2026

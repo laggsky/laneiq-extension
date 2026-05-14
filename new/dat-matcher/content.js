@@ -1,5 +1,6 @@
 (function() {
   'use strict';
+  console.log('[LaneIQ] content script loaded');
 
   // Must match INDEX_VERSION in popup.js — if the stored index was built with
   // an older version, content.js will refuse to load it (treats it as empty).
@@ -16,15 +17,32 @@
   let isDragging = false, dragOffX = 0, dragOffY = 0;
   let isResizing = false, resizeRightEdge = 0, resizeCorner = false;
   let _dlmT;
+  let _batchTimer = null;
+  const _dbMatchCache = {};
+  let _lastClickedRow = null;
+  let _lastExpandKey = '';
+  let _lastExpandTime = 0;
   // Memoization caches — keyed by raw input string, populated on first call
   const _normCache = new Map();
   const _dtCache   = new Map();
   let _initialized = false; // guard: don't re-read storage on edge-case re-init
   let panelPopped  = false; // true while the floating pop-out window is open
   let mapsApiKey   = '';    // Google Maps Distance Matrix API key
+  let licenseTier  = 'solo';
+  let dataSource   = 'csv';
+  let useCSV = true;
+  let useDB  = false;
+  let licenseKey   = '';
   let dlmMpg        = 6.5;  // saved MPG (persists across sessions)
   let dlmFuelPrice  = 3.89; // saved fuel price
   let dlmDriverRate = 0;    // saved driver pay $/mi
+
+  // In-memory cache for Railway /validate — skips the fetch if a successful
+  // validation happened within the last 60s in this page session. Resets
+  // naturally on every page load. Does NOT persist across reloads.
+  const LICENSE_CACHE_MS = 60 * 1000;
+  let _licenseValidatedAt = 0;
+  let _licenseCachedTier  = null;
 
   // ── City normalizer ─────────────────────────────────────────────────────────
   function norm(raw) {
@@ -61,7 +79,8 @@
 
   // Extract state from city string e.g. "Charlotte, NC" -> "nc"
   function getState(raw) {
-    const m = String(raw).match(/([A-Z]{2})\s*$/);
+    const clean = String(raw).replace(/\b\d{5}(-\d{4})?\s*$/, '').trim();
+    const m = clean.match(/([A-Z]{2})\s*$/);
     return m ? m[1].toLowerCase() : '';
   }
 
@@ -102,11 +121,9 @@
   // buckets. The post-filter below is kept as a safety net for edge cases
   // where state data is missing from either DAT or the CSV.
   function findOD(origin, dest) {
-    console.log('[LaneIQ DEBUG] findOD CALLED →', { origin, dest, odIndexNull: !odIndex, odIndexKeys: odIndex ? Object.keys(odIndex).length : 'N/A' });
-    if (!odIndex) { console.log('[LaneIQ DEBUG] findOD: odIndex is null'); return []; }
+    if (!odIndex) return [];
     const no = normKey(origin), nd = normKey(dest);
     const key = no + '|' + nd;
-    console.log('[LaneIQ DEBUG] findOD lookup →', { origin, dest, normKeyOrigin: no, normKeyDest: nd, key, hit: !!odIndex[key], hitCount: (odIndex[key] || []).length });
     if (!no || !nd) return [];
     const recs = odIndex[key] || [];
     if (!recs.length) return [];
@@ -123,10 +140,8 @@ if (so && ro && so !== ro) return false;
   }
 
   function findO(origin) {
-    console.log('[LaneIQ DEBUG] findO CALLED →', { origin, oIndexNull: !oIndex, oIndexKeys: oIndex ? Object.keys(oIndex).length : 'N/A' });
-    if (!oIndex) { console.log('[LaneIQ DEBUG] findO: oIndex is null'); return []; }
+    if (!oIndex) return [];
     const no = normKey(origin);
-    console.log('[LaneIQ DEBUG] findO lookup →', { origin, normKeyOrigin: no, hit: !!oIndex[no], hitCount: (oIndex[no] || []).length });
     if (!no) return [];
     const recs = oIndex[no] || [];
     if (!recs.length) return [];
@@ -135,7 +150,7 @@ if (so && ro && so !== ro) return false;
       const rs = getState(r.origin || '');
       return !rs || rs === so;
     }) : recs;
-    return dedup(filtered).slice(0, 15);
+    return dedup(filtered);
   }
 
   function findBroker(brokerName, origin) {
@@ -347,9 +362,18 @@ if (so && ro && so !== ro) return false;
     if (!origin || origin.length < 3) return;
     row.dataset.dlmChip = '1';
 
+    // Resolve origin/dest once at injection time — dataset takes priority,
+    // regex scan is the fallback, getCities result is last resort.
+    const rowText = row.textContent || '';
+    const cityMatches = [...rowText.matchAll(/([A-Z][a-zA-Z\s\.]+,\s*[A-Z]{2})/g)]
+      .map(m => m[1].trim())
+      .filter(c => c.length > 4 && !['Full', 'Partial', 'Reefer', 'Flat', 'Step'].some(w => c.startsWith(w)));
+    const chipOrigin = row.dataset.dlmOrigin || cityMatches[0] || origin;
+    const chipDest   = row.dataset.dlmDest   || cityMatches[1] || dest;
+
     const onClick = e => {
       e.stopPropagation(); e.preventDefault();
-      sendEmail(email, origin, dest || 'destination');
+      sendEmail(email, e.currentTarget.dataset.emailOrigin || '', e.currentTarget.dataset.emailDest || '');
       flashChipSent(e.currentTarget);
     };
 
@@ -359,6 +383,8 @@ if (so && ro && so !== ro) return false;
       const href = a.href.replace(/^mailto:/i, '').split('?')[0].trim(); // duplicate
       if (href.toLowerCase() === email.toLowerCase()) { // listeners across scans
         a.dataset.dlmChip = '1';
+        a.dataset.emailOrigin = chipOrigin;
+        a.dataset.emailDest   = chipDest;
         a.classList.add('dlm-email-chip');
         a.title = `Click to email ${email}`;
         a.addEventListener('click', onClick, true);
@@ -379,6 +405,8 @@ if (so && ro && so !== ro) return false;
       if (!parent.children.length && node.textContent.trim() === email && parent !== row) {
         if (parent.dataset.dlmChip) return; // element-level guard
         parent.dataset.dlmChip = '1';
+        parent.dataset.emailOrigin = chipOrigin;
+        parent.dataset.emailDest   = chipDest;
         parent.classList.add('dlm-email-chip');
         parent.title = `Click to email ${email}`;
         parent.addEventListener('click', onClick, true);
@@ -391,6 +419,8 @@ if (so && ro && so !== ro) return false;
       const chip = document.createElement('span');
       chip.className = 'dlm-email-chip';
       chip.dataset.dlmChip = '1';
+      chip.dataset.emailOrigin = chipOrigin;
+      chip.dataset.emailDest   = chipDest;
       chip.textContent = email;
       chip.title = `Click to email ${email}`;
       chip.addEventListener('click', onClick, true);
@@ -452,7 +482,6 @@ if (so && ro && so !== ro) return false;
     // the skip-guard comparison and the normKey lookup.
     origin = origin.replace(/(,\s*[A-Z]{2})\b.*$/, '$1').trim();
     if (dest) dest = dest.replace(/(,\s*[A-Z]{2})\b.*$/, '$1').trim();
-    console.log('[LaneIQ DEBUG] processRow extracted →', { origin, dest });
     if (!origin || origin.length < 3) return;
 
     // Skip rows whose city data hasn't changed since the last scan — this is
@@ -468,13 +497,29 @@ if (so && ro && so !== ro) return false;
     row.querySelectorAll('.dlm-badge-host').forEach(el => el.classList.remove('dlm-badge-host'));
     delete row.dataset.dlmChip; // let injectEmailChip re-run for the new row content
 
+    // In Pro+laneiq mode: stamp origin/dest so flushExpand can read them,
+    // but skip all matching and highlighting — the API handles lane data.
+    if (useDB) {
+      row.dataset.dlmOrigin = origin;
+      row.dataset.dlmDest   = dest || '';
+      const cacheKey = `${origin}|${dest || ''}`;
+      const cached = _dbMatchCache[cacheKey];
+      if (cached && !useCSV) {
+        row.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+        if (cached.matchType === 'origin') {
+          row.classList.add('dlm-blue');
+        } else {
+          row.classList.add(cached.loadCount >= 5 ? 'dlm-green' : 'dlm-yellow');
+        }
+      }
+      if (!useCSV) return;
+    }
+
     // If indexes aren't loaded yet, leave the row unstamped so the next scan
     // retries it. Stamping before indexes are ready would lock the row out
     // of the skip-guard above, making it permanently invisible to matching.
-    if (!odIndex || Object.keys(odIndex).length === 0) {
-      console.log('[LaneIQ DEBUG] processRow: odIndex not ready yet — will retry on next scan for', origin);
-      return;
-    }
+    if (!useCSV) return;
+    if (!odIndex || Object.keys(odIndex).length === 0) return;
 
     const datBroker = getBroker(row);
     const odM = dest ? findOD(origin, dest) : [];
@@ -515,8 +560,6 @@ if (so && ro && so !== ro) return false;
     }
 
     row.classList.add(cls);
-    console.log('[LaneIQ DEBUG] applied', cls, 'to row — classList now:', row.className);
-    setTimeout(() => console.log('[LaneIQ DEBUG] row still in DOM?', row.isConnected, '— className now:', row.className), 500);
 
     // Add badge — append to origin container (never inside .truncate, which clips long city names)
     if (badgeTxt) {
@@ -538,17 +581,17 @@ if (so && ro && so !== ro) return false;
     // duplicate listeners on the same element instance.
     if (!row.dataset.dlmBound) {
       row.dataset.dlmBound = '1';
-      row.addEventListener('click', e => {
-        // Panel opening is handled solely by flushExpand (addedNodes MutationObserver
-        // path) so that it only fires on row-open, not on row-close. Calling showPanel
-        // here would fire on both clicks (open and close), reopening the panel when
-        // the user is trying to collapse a row.
-        console.log('[LaneIQ DEBUG] row clicked — classes:', row.className);
+      row.addEventListener('click', () => {
+        // Panel opening handled by flushExpand (addedNodes MutationObserver)
+        // so it only fires on row-open, not row-close.
       });
     }
   }
 
   // ── Search ───────────────────────────────────────────────────────────────────
+  // Returns true if query looks like a load number: all digits, 6 or more chars.
+  function isLoadNumQuery(q) { return /^\d{6,}$/.test(q); }
+
   function searchHistory(query) {
     if (!oIndex) return [];
     const q = query.toLowerCase().trim();
@@ -561,7 +604,8 @@ if (so && ro && so !== ro) return false;
         if (seen.has(key)) continue;
         if ((r.origin      || '').toLowerCase().includes(q) ||
             (r.destination || '').toLowerCase().includes(q) ||
-            (r.broker      || '').toLowerCase().includes(q)) {
+            (r.broker      || '').toLowerCase().includes(q) ||
+            (r.loadNum     || '').toLowerCase().includes(q)) {
           seen.add(key);
           results.push(r);
         }
@@ -570,11 +614,71 @@ if (so && ro && so !== ro) return false;
     return results.sort((a, b) => parseDate(b.puDate) - parseDate(a.puDate)).slice(0, 50);
   }
 
+  // Full-index load number lookup — searches every record in oIndex regardless
+  // of whether it appeared in the current panel match. Used when the query
+  // looks like a load number (6+ digits) so dispatchers can pull up any
+  // historical record by load # even when it isn't a lane match.
+  function searchByLoadNum(loadNum) {
+    if (!oIndex) return [];
+    const seen = new Set();
+    const results = [];
+    for (const recs of Object.values(oIndex)) {
+      for (const r of recs) {
+        if ((r.loadNum || '') === loadNum) {
+          const key = r.loadNum + '|' + r.origin + '|' + r.puDate;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          results.push(r);
+        }
+      }
+    }
+    return results.sort((a, b) => parseDate(b.puDate) - parseDate(a.puDate));
+  }
+
   function showSearchResults(query) {
-    const results = searchHistory(query);
+    const q = query.trim();
     const body = document.getElementById('dlm-body');
+
+    // Load number mode: full-index lookup, distinct label
+    if (isLoadNumQuery(q)) {
+      const loadResults = searchByLoadNum(q);
+      // Also include any text-search matches (e.g. broker named "1234567") but
+      // avoid double-counting records already found by load number lookup.
+      const textResults = searchHistory(q).filter(r => (r.loadNum || '') !== q);
+      const combined = [...loadResults, ...textResults];
+
+      if (!combined.length) {
+        body.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No records found for load #<br><strong style="color:#6e6e73;font-weight:600">${esc(q)}</strong></div>`;
+        return;
+      }
+
+      let html = '';
+      if (loadResults.length) {
+        const st = calcStats(loadResults);
+        html += `
+          <div class="dlm-sum">
+            <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">CSV Lookup</div>
+            <div class="dlm-lane" style="color:#6e6e73">Load # ${esc(q)}</div>
+            <div class="dlm-stats">
+              <div><div class="dlm-sv">${loadResults.length}</div><div class="dlm-sl">Records</div></div>
+              <div><div class="dlm-sv">${st.avg}</div><div class="dlm-sl">Avg Rate</div></div>
+              <div><div class="dlm-sv">${st.best}</div><div class="dlm-sl">Best Rate</div></div>
+            </div>
+          </div>
+          <div class="dlm-stitle" style="color:#a78bfa">CSV Lookup · ${loadResults.length} record${loadResults.length !== 1 ? 's' : ''}</div>
+          ${renderRecs(loadResults, '#a78bfa', 50, true, true)}`;
+      }
+      if (textResults.length) {
+        html += `<div class="dlm-stitle">Other Matches · ${textResults.length}</div>${renderRecs(textResults, '#c7c7cc', 20)}`;
+      }
+      body.innerHTML = html;
+      return;
+    }
+
+    // Normal text search mode
+    const results = searchHistory(q);
     if (!results.length) {
-      body.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No results for<br><strong style="color:#6e6e73;font-weight:600">${esc(query)}</strong></div>`;
+      body.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No results for<br><strong style="color:#6e6e73;font-weight:600">${esc(q)}</strong></div>`;
       return;
     }
     const st = calcStats(results);
@@ -582,7 +686,7 @@ if (so && ro && so !== ro) return false;
     body.innerHTML = `
       <div class="dlm-sum">
         <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Search</div>
-        <div class="dlm-lane" style="color:#6e6e73">${esc(query)}</div>
+        <div class="dlm-lane" style="color:#6e6e73">${esc(q)}</div>
         <div class="dlm-stats">
           <div><div class="dlm-sv">${cap ? '50+' : results.length}</div><div class="dlm-sl">Results</div></div>
           <div><div class="dlm-sv">${st.avg}</div><div class="dlm-sl">Avg Rate</div></div>
@@ -609,7 +713,7 @@ if (so && ro && so !== ro) return false;
       </div>
       <div id="dlm-search-wrap">
         <span style="color:#4b5563;font-size:13px;flex-shrink:0;line-height:1">⌕</span>
-        <input id="dlm-search" type="text" placeholder="Search origin, destination, broker…" autocomplete="off" spellcheck="false">
+        <input id="dlm-search" type="text" placeholder="Search origin, destination, broker, load #…" autocomplete="off" spellcheck="false">
         <button id="dlm-search-clear" title="Clear search">✕</button>
       </div>
       <div id="dlm-body">
@@ -776,13 +880,10 @@ if (so && ro && so !== ro) return false;
 
     // Blue: same origin city only
     if (!odM.length && oM.length) {
-      console.log('[LaneIQ] oM records[0]:', JSON.stringify(oM[0]));
-      console.log('[LaneIQ] oM records[1]:', JSON.stringify(oM[1]));
-      console.log('[LaneIQ] oM records[2]:', JSON.stringify(oM[2]));
-      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 20, true, true);
+      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true);
     } else if (odM.length && oM.length) {
       const originOnly = oM.filter(r => !odM.find(o => o.loadNum === r.loadNum));
-      if (originOnly.length) html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 20, true, true);
+      if (originOnly.length) html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true);
     }
 
     panelBodyHTML = html;
@@ -797,6 +898,303 @@ if (so && ro && so !== ro) return false;
     // leave the panel empty, and no setTimeout delay before content is visible.
     const bodyEl = document.getElementById('dlm-body');
     bodyEl.innerHTML = html;
+    bodyEl.scrollTop = 0;
+  }
+
+  const MATCH_URL = 'https://laneiq-backend-production.up.railway.app/match';
+
+  // Regex to extract "City, ST → City, ST" from DAT's detail panel header.
+  // The unicode → arrow is unique to route headers so false-positives are rare.
+  const ROUTE_RE = /([A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2})\s*→\s*([A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2})/;
+
+  async function showPanelDual(origin, dest, odM, oM, bM, datBroker, detailNode) {
+    if (!panel) panel = buildPanel();
+    if (!panelPopped) panel.style.display = 'flex';
+
+    const bodyEl = document.getElementById('dlm-body');
+
+    const titleEl = panel.querySelector('#dlm-title');
+    if (titleEl) {
+      const laneShort = dest
+        ? `${origin.split(',')[0].trim()} → ${dest.split(',')[0].trim()}`
+        : origin.split(',')[0].trim();
+      titleEl.innerHTML = `◈ ${esc(laneShort)}<small> · drag</small>`;
+    }
+
+    // --- CSV section ---
+    const pri = odM.length ? odM : oM.length ? oM : bM;
+    const st = calcStats(pri);
+    const arrow = dest ? `<span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(dest)}` : '';
+
+    let csvHTML = `
+      <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:10px 14px 6px;font-weight:600">📁 From Your CSV</div>
+      <div class="dlm-sum">
+        <div class="dlm-lane">${esc(origin)}${arrow}</div>
+        <div class="dlm-stats">
+          <div><div class="dlm-sv">${st.count}</div><div class="dlm-sl">Bookings</div></div>
+          <div><div class="dlm-sv">${st.avg}</div><div class="dlm-sl">Avg Rate</div></div>
+          <div><div class="dlm-sv">${st.best}</div><div class="dlm-sl">Best Rate</div></div>
+        </div>
+      </div>`;
+
+    if (odM.length) {
+      csvHTML += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
+                 renderRecs(odM, '#34c759', 20, true, true);
+    }
+    if (!odM.length && oM.length) {
+      csvHTML += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true);
+    } else if (odM.length && oM.length) {
+      const originOnly = oM.filter(r => !odM.find(x => x.loadNum === r.loadNum));
+      if (originOnly.length) csvHTML += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true);
+    }
+
+    const dbLoadingHTML = `
+      <div id="dlm-db-section">
+        <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:16px 14px 6px;font-weight:600">🗄️ LaneIQ Database</div>
+        <div style="text-align:center;padding:20px;color:#aeaeb2;font-size:13px">Loading…</div>
+      </div>`;
+
+    bodyEl.innerHTML = csvHTML + dbLoadingHTML;
+    bodyEl.scrollTop = 0;
+
+    // --- DB fetch ---
+    const payload = { origin, destination: dest, licenseKey };
+    let result;
+    try {
+      const resp = await fetch(MATCH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        const errText = await resp.text();
+        const dbErrHTML = `
+          <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:16px 14px 6px;font-weight:600">🗄️ LaneIQ Database</div>
+          <div style="text-align:center;padding:20px;color:#ff3b30;font-size:13px">Server error ${resp.status}</div>`;
+        const dbErrSection = document.getElementById('dlm-db-section');
+        if (dbErrSection) {
+          dbErrSection.outerHTML = dbErrHTML;
+        } else {
+          bodyEl.innerHTML = csvHTML + dbErrHTML;
+        }
+        panelBodyHTML = csvHTML + dbErrHTML;
+        return;
+      }
+      result = await resp.json();
+    } catch (err) {
+      const dbErrHTML = `
+        <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:16px 14px 6px;font-weight:600">🗄️ LaneIQ Database</div>
+        <div style="text-align:center;padding:20px;color:#ff3b30;font-size:13px">Connection error</div>`;
+      const dbErrSection = document.getElementById('dlm-db-section');
+      if (dbErrSection) {
+        dbErrSection.outerHTML = dbErrHTML;
+      } else {
+        bodyEl.innerHTML = csvHTML + dbErrHTML;
+      }
+      panelBodyHTML = csvHTML + dbErrHTML;
+      return;
+    }
+
+    if (result && result.loadCount != null) {
+      result = { exact: result.loadCount > 0 ? { count: result.loadCount, avgRate: result.avgRate, minRate: result.minRate, maxRate: result.maxRate, loads: [] } : null, origin: null };
+    }
+
+    const fmt = n => (n != null && !isNaN(n))
+      ? '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+      : 'N/A';
+
+    const statsBlock = data => `
+      <div class="dlm-stats">
+        <div><div class="dlm-sv">${data.count}</div><div class="dlm-sl">Loads</div></div>
+        <div><div class="dlm-sv">${fmt(data.avgRate)}</div><div class="dlm-sl">Avg Rate</div></div>
+        <div><div class="dlm-sv">${fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
+      </div>`;
+
+    const mapLoads = loads => (loads || []).map(l => ({
+      loadNum: '', puDate: l.pu_date ? l.pu_date.toString().slice(0, 10) : '',
+      broker: '', rate: l.rate != null ? String(l.rate) : '',
+      origin: l.origin || '', destination: l.destination || '',
+      pickupCompany: l.pickup_address || '', deliveryCompany: l.delivery_address || '',
+      commodity: l.commodity || '', weight: l.weight_info || ''
+    }));
+
+    let dbHTML = `<div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:16px 14px 6px;font-weight:600">🗄️ LaneIQ Database</div>`;
+
+    if (!result || (!result.exact && !result.origin)) {
+      dbHTML += `<div style="text-align:center;padding:20px;color:#aeaeb2;font-size:13px">No database data found for this lane</div>`;
+    } else {
+      if (result.exact) {
+        dbHTML += `<div class="dlm-sum"><div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>${statsBlock(result.exact)}${renderRecs(mapLoads(result.exact.loads), '#34c759', 999, true, true)}</div>`;
+      }
+      if (result.origin) {
+        dbHTML += `<div class="dlm-sum" style="margin-top:8px"><div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>${statsBlock(result.origin)}${renderRecs(mapLoads(result.origin.loads), '#007aff', 999, true, true)}</div>`;
+      }
+    }
+
+    const dbSection = document.getElementById('dlm-db-section');
+    if (dbSection) {
+      dbSection.outerHTML = dbHTML;
+    } else {
+      bodyEl.innerHTML = csvHTML + dbHTML;
+    }
+    panelBodyHTML = csvHTML + dbHTML;
+
+    if (panelPopped) {
+      chrome.storage.local.set({
+        panelState: { origin, dest, mode: 'api', renderedHTML: csvHTML + dbHTML }
+      });
+    }
+    bodyEl.scrollTop = 0;
+  }
+
+  async function showPanelFromAPI(origin, dest, detailNode) {
+    if (!panel) panel = buildPanel();
+    if (!panelPopped) panel.style.display = 'flex';
+
+    const bodyEl = document.getElementById('dlm-body');
+    bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px">Loading LaneIQ data…</div>`;
+    bodyEl.scrollTop = 0;
+
+    // If origin wasn't extracted by flushExpand (no CSV highlighting), read it
+    // directly from DAT's "City, ST → City, ST" header inside the detail panel.
+    // DAT renders panel content async so retry up to 3× with 250ms gaps.
+    if (!origin && detailNode) {
+      for (let i = 0; i < 3 && !origin; i++) {
+        if (i > 0) await new Promise(r => setTimeout(r, 250));
+        const text = detailNode.innerText || detailNode.textContent || '';
+        const m = ROUTE_RE.exec(text);
+        if (m) { origin = m[1].trim(); dest = m[2].trim(); }
+        console.log(`[LaneIQ] header read attempt ${i + 1}:`, origin || '(empty)');
+      }
+    }
+
+    if (!origin) {
+      bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px">Could not read lane — try clicking the row again</div>`;
+      return;
+    }
+
+    const titleEl = panel.querySelector('#dlm-title');
+    if (titleEl) {
+      const laneShort = dest
+        ? `${origin.split(',')[0].trim()} → ${dest.split(',')[0].trim()}`
+        : origin.split(',')[0].trim();
+      titleEl.innerHTML = `◈ ${esc(laneShort)}<small> · drag</small>`;
+    }
+
+    const payload = { origin, destination: dest, licenseKey };
+    console.log('[LaneIQ] /match request:', payload);
+
+    let result;
+    try {
+      const resp = await fetch(MATCH_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      console.log('[LaneIQ] /match status:', resp.status);
+      if (!resp.ok) {
+        const errText = await resp.text();
+        console.error('[LaneIQ] /match error response:', errText);
+        bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#ff3b30;font-size:13px">Server error ${resp.status}<br><span style="font-size:11px;color:#aeaeb2">${esc(errText.slice(0, 120))}</span></div>`;
+        return;
+      }
+      result = await resp.json();
+      console.log('[LaneIQ] /match result:', result);
+    } catch (err) {
+      console.error('[LaneIQ] /match fetch failed:', err);
+      bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#ff3b30;font-size:13px">Connection error<br><span style="font-size:11px;color:#aeaeb2">${esc(String(err))}</span></div>`;
+      return;
+    }
+
+    // Normalise both response shapes:
+    // Old backend: { loadCount, avgRate, minRate, maxRate }
+    // New backend: { exact: {...}, origin: {...} }
+    if (result && result.loadCount != null) {
+      result = { exact: result.loadCount > 0 ? { count: result.loadCount, avgRate: result.avgRate, minRate: result.minRate, maxRate: result.maxRate } : null, origin: null };
+    }
+
+    if (!result || (!result.exact && !result.origin)) {
+      const arrow = dest ? `${esc(origin)} → ${esc(dest)}` : esc(origin);
+      bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No data found<br><span style="font-size:11px">${arrow}</span></div>`;
+      panelBodyHTML = bodyEl.innerHTML;
+      return;
+    }
+
+    const fmt = n => (n != null && !isNaN(n))
+      ? '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+      : 'N/A';
+
+    function statsBlock(data) {
+      return `
+        <div class="dlm-stats">
+          <div><div class="dlm-sv">${data.count}</div><div class="dlm-sl">Loads</div></div>
+          <div><div class="dlm-sv">${fmt(data.avgRate)}</div><div class="dlm-sl">Avg Rate</div></div>
+          <div><div class="dlm-sv">${fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
+        </div>
+        <div class="dlm-stats" style="margin-top:6px">
+          <div><div class="dlm-sv">${fmt(data.minRate)}</div><div class="dlm-sl">Min Rate</div></div>
+        </div>`;
+    }
+
+    const arrow = dest ? `<span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(dest)}` : '';
+    let html = `<div class="dlm-lane" style="padding:10px 14px 4px">${esc(origin)}${arrow}</div>`;
+
+    if (result.exact) {
+      const mappedLoads = (result.exact.loads || []).map(l => ({
+        loadNum:         '',
+        puDate:          l.pu_date ? l.pu_date.toString().slice(0, 10) : '',
+        broker:          '',
+        rate:            l.rate != null ? String(l.rate) : '',
+        origin:          l.origin || '',
+        destination:     l.destination || '',
+        pickupCompany:   l.pickup_address || '',
+        deliveryCompany: l.delivery_address || '',
+        commodity:       l.commodity || '',
+        weight:          l.weight_info || ''
+      }));
+
+      html += `
+        <div class="dlm-sum">
+          <div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>
+          ${statsBlock(result.exact)}
+          ${renderRecs(mappedLoads, '#34c759', 999, true, true)}
+        </div>`;
+    }
+
+    if (result.origin) {
+      const mappedOriginLoads = (result.origin.loads || []).map(l => ({
+        loadNum:         '',
+        puDate:          l.pu_date ? l.pu_date.toString().slice(0, 10) : '',
+        broker:          '',
+        rate:            l.rate != null ? String(l.rate) : '',
+        origin:          l.origin || '',
+        destination:     l.destination || '',
+        pickupCompany:   l.pickup_address || '',
+        deliveryCompany: l.delivery_address || '',
+        commodity:       l.commodity || '',
+        weight:          l.weight_info || ''
+      }));
+
+      html += `
+        <div class="dlm-sum" style="margin-top:8px">
+          <div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>
+          ${statsBlock(result.origin)}
+          ${renderRecs(mappedOriginLoads, '#007aff', 999, true, true)}
+        </div>`;
+    }
+
+    panelBodyHTML = html;
+    bodyEl.innerHTML = html;
+    if (panelPopped) {
+      chrome.storage.local.set({
+        panelState: {
+          origin,
+          dest,
+          mode: 'api',
+          renderedHTML: html
+        }
+      });
+    }
     bodyEl.scrollTop = 0;
   }
 
@@ -819,7 +1217,7 @@ if (so && ro && so !== ro) return false;
       const ln   = String(r.loadNum||'').replace(/\n.*/,'').trim() || '—';
       const dt   = String(r.puDate||'').split('T')[0].substring(0, 10);
       const broker = String(r.broker||'').trim();
-      const gUrl = ln !== '—' ? gmailUrl(ln) : null;
+      const gUrl = (ln !== '—' && !(useDB && !useCSV)) ? gmailUrl(ln) : null;
       const gmailBtn = gUrl ? `<a href="${gUrl}" target="_blank" class="dlm-gmail-btn">📧 Gmail</a>` : '';
 
       const pickupAddr   = parseCompanyAddress(r.pickupCompany   || '');
@@ -851,43 +1249,161 @@ if (so && ro && so !== ro) return false;
     }).join('');
   }
 
+  function scheduleBatchHighlight() {
+    if (_batchTimer) clearTimeout(_batchTimer);
+    _batchTimer = setTimeout(runBatchHighlight, 500);
+  }
+
+  async function runBatchHighlight() {
+    const rows = Array.from(document.querySelectorAll('[data-dlm-origin][data-dlm-dest]'));
+    if (!rows.length) return;
+
+    const seen = new Set();
+    const lanes = [];
+    const rowMap = {};
+
+    rows.forEach(row => {
+      const origin = row.dataset.dlmOrigin || '';
+      const dest = row.dataset.dlmDest || '';
+      if (!origin || !dest) return;
+      const key = `${origin}|${dest}`;
+      if (!rowMap[key]) rowMap[key] = [];
+      rowMap[key].push(row);
+      if (!seen.has(key)) {
+        seen.add(key);
+        lanes.push({ origin, destination: dest });
+      }
+    });
+
+    if (!lanes.length) return;
+
+    try {
+      const resp = await fetch('https://laneiq-backend-production.up.railway.app/batch-match', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lanes })
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      Object.keys(data.results).forEach(key => {
+        const match = data.results[key];
+        _dbMatchCache[key] = match;
+        (rowMap[key] || []).forEach(row => {
+          const alreadyColored = ['dlm-green','dlm-yellow','dlm-blue','dlm-purple'].some(c => row.classList.contains(c));
+          if (alreadyColored && useCSV) return;
+          row.style.backgroundColor = '';
+          row.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+          if (match.matchType === 'origin') {
+            row.classList.add('dlm-blue');
+          } else {
+            row.classList.add(match.loadCount >= 5 ? 'dlm-green' : 'dlm-yellow');
+          }
+          row.dataset.dlmDbMatch = JSON.stringify(match);
+        });
+      });
+
+      console.log(`[LaneIQ] Batch highlight done — ${Object.keys(data.results).length}/${lanes.length} lanes matched`);
+    } catch (err) {
+      console.error('[LaneIQ] runBatchHighlight error:', err);
+    }
+  }
+
   // ── Scan ────────────────────────────────────────────────────────────────────
   function scan() {
-    if (!odIndex && !oIndex) return;
+    const usingAPI = licenseTier === 'pro' && useDB;
+    if (!odIndex && !oIndex && !usingAPI) return;
     // processRow skips rows whose origin/dest hasn't changed, so no bulk
     // class-removal pass is needed — stale state is cleared per-row on demand.
     document.querySelectorAll('[class*="row-container"], [class*="row-cells"]').forEach(r => {
       processRow(r);
       injectEmailChip(r);
     });
+    if (usingAPI) scheduleBatchHighlight();
   }
 
   // ── Init ────────────────────────────────────────────────────────────────────
   async function init() {
     if (_initialized) return; // indexes already in memory — nothing to do
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate']);
-    console.log('[LaneIQ DEBUG] storage.get result →', {
-      laneCount:    s.laneCount,
-      indexVersion: s.indexVersion,
-      odIndexKeys:  s.odIndex && typeof s.odIndex === 'object' ? Object.keys(s.odIndex).length : 'N/A',
-      odSampleKey:  s.odIndex && typeof s.odIndex === 'object' ? Object.keys(s.odIndex).slice(0, 3) : 'N/A',
-      oIndexKeys:   s.oIndex  && typeof s.oIndex  === 'object' ? Object.keys(s.oIndex).length  : 'N/A',
-      oSampleKey:   s.oIndex  && typeof s.oIndex  === 'object' ? Object.keys(s.oIndex).slice(0, 3)  : 'N/A',
-    });
-    if (!s.laneCount) return;
-    if (s.indexVersion !== INDEX_VERSION) {
-      console.warn('[LaneIQ] Stored index version', s.indexVersion, '!== current', INDEX_VERSION, '— skipping stale index. Re-upload CSV in the extension popup.');
-      return;
+    // License gate — Railway /validate is the authoritative check.
+    // Falls back to stored licenseValid only on network error.
+    const lic = await chrome.storage.local.get(['licenseKey', 'licenseValid']);
+
+    if (!lic.licenseKey) return;
+
+    const VALIDATION_URL = 'https://laneiq-backend-production.up.railway.app/validate';
+    let licenseOK = false;
+    let backendTier = null;
+
+    // Check 60-second in-memory cache first to avoid hammering Railway when
+    // the user has multiple DAT tabs or refreshes frequently.
+    const cacheAge = Date.now() - _licenseValidatedAt;
+    if (_licenseValidatedAt > 0 && cacheAge < LICENSE_CACHE_MS) {
+      console.log('[LaneIQ] license cache hit |', Math.round(cacheAge / 1000) + 's old | tier:', _licenseCachedTier);
+      licenseOK = true;
+      backendTier = _licenseCachedTier;
+    } else try {
+      const resp = await fetch(VALIDATION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: lic.licenseKey }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.valid) {
+          licenseOK = true;
+          backendTier = data.tier || null;
+          _licenseValidatedAt = Date.now();
+          _licenseCachedTier  = backendTier;
+          await chrome.storage.local.set({
+            licenseValid: true,
+            licenseCheckedAt: new Date().toISOString(),
+          });
+          console.log('[LaneIQ] license validated by Railway | tier:', backendTier);
+        } else {
+          _licenseValidatedAt = 0;
+          _licenseCachedTier  = null;
+          await chrome.storage.local.set({ licenseValid: false });
+          return;
+        }
+      } else {
+        // Non-2xx response — treat as network error, fall back to stored state
+        if (!lic.licenseValid) return;
+        licenseOK = true;
+      }
+    } catch (err) {
+      // Network unreachable — fail open if we have a previously-stored valid flag
+      console.error('[LaneIQ] Railway /validate network error:', err.message);
+      if (!lic.licenseValid) return;
+      licenseOK = true;
     }
 
-    odIndex     = s.odIndex     || {};
-    oIndex      = s.oIndex      || {};
-    brokerIndex = s.brokerIndex || {};
-    console.log('[LaneIQ DEBUG] indexes assigned →', { odIndexKeys: Object.keys(odIndex).length, oIndexKeys: Object.keys(oIndex).length });
-    const _sampleRecs = Object.values(oIndex).flat().slice(0, 3);
-    console.log('[LaneIQ] Index sample records (raw stored shape):');
-    _sampleRecs.forEach((r, i) => console.log(`  [${i}]`, JSON.stringify(r)));
+    if (!licenseOK) return;
+
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB']);
+
+    // Resolve tier/dataSource early so we can use them in the guards below
+    licenseTier = s.licenseTier || 'solo';
+    useCSV = s.useCSV !== false;
+    useDB  = s.useDB  === true;
+    licenseKey  = lic.licenseKey || '';
+    const usingAPI = licenseTier === 'pro' && useDB;
+
+    // CSV gate — skip if no history loaded, unless Pro+laneiq (API mode needs no CSV)
+    if (!s.laneCount && !usingAPI) return;
+
+    // Only validate/load CSV indexes when CSV data is present
+    if (s.laneCount) {
+      if (s.indexVersion !== INDEX_VERSION) {
+        console.warn('[LaneIQ] Stored index version', s.indexVersion, '!== current', INDEX_VERSION, '— skipping stale index. Re-upload CSV in the extension popup.');
+        return;
+      }
+      odIndex     = s.odIndex     || {};
+      oIndex      = s.oIndex      || {};
+      brokerIndex = s.brokerIndex || {};
+    }
+
     gmailIndex       = s.gmailIndex    || 0;
     senderEmail      = s.senderEmail   || '';
     senderGmailIndex = typeof s.senderGmailIndex !== 'undefined' ? s.senderGmailIndex : 0;
@@ -904,18 +1420,40 @@ Thanks,
 {name}
 {company}`;
 
-    panelPopped    = s.panelPopped    || false;
+    panelPopped    = false;
+    chrome.storage.local.set({ panelPopped: false });
     mapsApiKey     = s.mapsApiKey     || '';
     dlmMpg         = +s.dlmMpg         || 6.5;
     dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
     dlmDriverRate  = +s.dlmDriverRate  || 0;
     _initialized = true;
 
-    // Re-show the side panel when the pop-out window is closed
+    function clearAllHighlights() {
+      document.querySelectorAll('.dlm-green, .dlm-yellow, .dlm-blue, .dlm-purple').forEach(el => {
+        el.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+      });
+      document.querySelectorAll('.dlm-badge').forEach(el => el.remove());
+      document.querySelectorAll('[data-dlm-origin]').forEach(el => {
+        delete el.dataset.dlmOrigin;
+        delete el.dataset.dlmDest;
+        delete el.dataset.dlmMatch;
+      });
+      _dbMatchCache = {};
+    }
+
+    // Re-show the side panel when the pop-out window is closed.
+    // Also reinitialize when the user switches data source or uploads a new CSV
+    // so changes take effect without a full page reload.
     chrome.storage.onChanged.addListener((changes) => {
       if ('panelPopped' in changes) {
         panelPopped = changes.panelPopped.newValue || false;
         if (!panelPopped && panel && panelBodyHTML) panel.style.display = 'flex';
+      }
+      if ('useCSV' in changes || 'useDB' in changes || 'laneCount' in changes) {
+        clearAllHighlights();
+        _initialized = false;
+        odIndex = oIndex = brokerIndex = null;
+        init();
       }
     });
 
@@ -940,6 +1478,50 @@ Thanks,
     }, 700);
 
     setupRouteInterceptor();
+
+    document.addEventListener('click', e => {
+      if (e.target.closest('[id^="dlm-"]')) return;
+      const row = e.target.closest('[data-dlm-origin]');
+      if (row) _lastClickedRow = row;
+    }, true);
+  }
+
+  // ── Read current Origin + Destination from DAT's search bar ────────────────────
+  // These inputs are always populated when load results are visible, making them
+  // the most reliable source of lane data for the API panel in DB mode.
+  function getDATSearchCities() {
+    function isOwn(el) {
+      return !!(el.closest('#dlm-sidebar') || el.closest('[id^="dlm-"]') || el.closest('[class^="dlm-"]'));
+    }
+
+    function findInputByLabel(labelText) {
+      // Strategy 1: label/div/span whose exact text matches, then nearby input
+      for (const el of document.querySelectorAll('label, div, span')) {
+        if (isOwn(el)) continue;
+        if (el.textContent.trim() !== labelText) continue;
+        const parent = el.parentElement;
+        if (!parent) continue;
+        const input = parent.querySelector('input') ||
+                      el.nextElementSibling?.querySelector?.('input') ||
+                      (el.nextElementSibling?.tagName === 'INPUT' ? el.nextElementSibling : null);
+        if (input && !isOwn(input) && input.value.trim()) return input.value.trim();
+      }
+      // Strategy 2: input attributes
+      for (const attr of ['placeholder', 'aria-label', 'id', 'name']) {
+        for (const input of document.querySelectorAll('input')) {
+          if (isOwn(input)) continue;
+          const val = (input.getAttribute(attr) || '').toLowerCase();
+          if (val.includes(labelText.toLowerCase()) && input.value.trim())
+            return input.value.trim();
+        }
+      }
+      return '';
+    }
+
+    const origin = findInputByLabel('Origin');
+    const dest   = findInputByLabel('Destination');
+    console.log('[LaneIQ] DAT search bar:', { origin, dest });
+    return { origin, dest };
   }
 
   // ── Extract DAT search origin (where the user is searching from) ─────────────
@@ -977,10 +1559,6 @@ Thanks,
                         labelEl.nextElementSibling?.querySelector?.('input') ||
                         (labelEl.nextElementSibling?.tagName === 'INPUT' ? labelEl.nextElementSibling : null);
           if (input && !isOwn(input)) {
-            console.log('[LaneIQ] findDATInput ✓ via "Origin" label → input:', {
-              id: input.id, name: input.name, placeholder: input.placeholder,
-              class: input.className.slice(0, 80), value: input.value,
-            });
             return input;
           }
         }
@@ -994,21 +1572,10 @@ Thanks,
       ]) {
         for (const el of document.querySelectorAll(sel)) {
           if (isOwn(el)) continue;
-          console.log(`[LaneIQ] findDATInput ✓ via "${sel}":`, {
-            id: el.id, name: el.name, placeholder: el.placeholder,
-            class: el.className.slice(0, 80), value: el.value,
-          });
           return el;
         }
       }
 
-      console.warn('[LaneIQ] findDATInput: no match found. All inputs on page:',
-        [...document.querySelectorAll('input')].map(i => ({
-          id: i.id, name: i.name, placeholder: i.placeholder,
-          ariaLabel: i.getAttribute('aria-label'), value: i.value,
-          class: i.className.slice(0, 80),
-        }))
-      );
       return null;
     }
 
@@ -1026,7 +1593,6 @@ Thanks,
         if (v && v.length > 2) {
           dhFromEl.value = v;
           onValueChange();
-          console.log('[LaneIQ] DH From overridden by DAT search box →', v);
           return true;
         }
         return false;
@@ -1061,8 +1627,6 @@ Thanks,
       datInput.addEventListener('change', syncImmediate);
       datInput.addEventListener('input',  syncDebounced);
 
-      console.log('[LaneIQ] DH From watching →',
-        datInput.placeholder || datInput.getAttribute('aria-label') || datInput.id || '(unlabelled)');
     }
 
     // Try immediately — the origin input is usually in the DOM when the modal opens
@@ -1075,7 +1639,6 @@ Thanks,
       if (found) { obs.disconnect(); obs = null; attach(found); }
     });
     obs.observe(document.body, { childList: true, subtree: true });
-    console.log('[LaneIQ] DH From: DAT origin input not found yet — observing…');
 
     // Return cleanup so the caller can stop the observer when the modal closes
     return () => { if (obs) { obs.disconnect(); obs = null; } };
@@ -1088,27 +1651,66 @@ Thanks,
       if (!/view\s*route/i.test(el.textContent.replace(/\s+/g,' ').trim())) return;
       el.dataset.dlmRouteOk = '1';
 
-      // Force gradient via inline style — inline !important beats any stylesheet,
-      // including DAT's own !important class rules on the same element.
-      el.style.setProperty('background', 'linear-gradient(180deg,#72d4ff 0%,#0a84ff 45%,#0060df 46%,#004fc4 100%)', 'important');
-      el.style.setProperty('box-shadow', 'inset 0 1px 0 rgba(255,255,255,.5),0 4px 10px rgba(0,80,200,.4)', 'important');
+      if (!el.parentNode) return;
 
-      // Replace DAT's button content with our styled version
-      el.innerHTML =
-        `<svg class="dlm-route-icon" viewBox="0 0 16 16" width="12" height="12"
-              fill="currentColor" aria-hidden="true">
+      const wrapper = document.createElement('div');
+      wrapper.style.cssText = 'display:flex;flex-direction:column;align-items:flex-start;gap:13px;';
+
+      el.parentNode.insertBefore(wrapper, el);
+      wrapper.appendChild(el);
+      const BTN_BASE = 'width:176px;min-width:176px;max-width:176px;height:40px;padding:0 14px;font-size:12px;font-weight:700;letter-spacing:.01em;font-family:-apple-system,"SF Pro Text",BlinkMacSystemFont,system-ui,sans-serif;border-radius:10px;border:none;border-left:5px solid #0058e0;cursor:pointer;color:#0f1923;background:#eef2ff;box-sizing:border-box;display:inline-flex;align-items:center;gap:7px;box-shadow:0 10px 28px rgba(0,60,200,.32),0 4px 10px rgba(0,0,0,.18);transition:box-shadow .15s,background .15s;';
+
+      // Replace DAT's internal markup so their child styles can't fight ours
+      el.textContent = 'View Route';
+      el.style.cssText = BTN_BASE;
+      el.style.setProperty('background', '#eef2ff', 'important');
+      el.style.setProperty('border-left', '5px solid #0058e0', 'important');
+      el.style.setProperty('color', '#0f1923', 'important');
+      el.style.setProperty('box-shadow', '0 10px 28px rgba(0,60,200,.32),0 4px 10px rgba(0,0,0,.18)', 'important');
+
+      // RPM / Maps button
+      const rpmBtn = document.createElement('button');
+      rpmBtn.innerHTML =
+        `<svg viewBox="0 0 16 16" width="13" height="13" fill="#0058e0" aria-hidden="true" style="flex-shrink:0">
            <path d="M8 1C5.24 1 3 3.24 3 6c0 3.9 5 9 5 9s5-5.1 5-9c0-2.76-2.24-5-5-5z
                     m0 7c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
          </svg>RPM / Maps`;
-
-      el.addEventListener('mousedown', () => { el.style.display = 'none'; }, true);
-      el.addEventListener('click', e => {
+      rpmBtn.style.cssText = BTN_BASE;
+      rpmBtn.addEventListener('click', e => {
         e.stopPropagation();
         e.preventDefault();
         const { origin, dest } = getDetailCities(el);
         const rate = getDetailRate(el);
-        showRouteModal(origin, dest, rate, () => { el.style.display = ''; });
+        showRouteModal(origin, dest, rate, () => {});
       }, true);
+
+      // Google Maps directions button
+      const mapsBtn = document.createElement('button');
+      mapsBtn.innerHTML = `<span style="font-size:14px;line-height:1;flex-shrink:0">🗺</span>Google Maps`;
+      mapsBtn.style.cssText = BTN_BASE;
+      mapsBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        e.preventDefault();
+        const { origin, dest } = getDetailCities(el);
+
+        const truckCity = (() => {
+          const cityRe = /^[A-Za-z][A-Za-z\s\.]{1,20},\s*[A-Z]{2}$/;
+          for (const input of document.querySelectorAll('input')) {
+            const val = (input.value || '').trim();
+            if (cityRe.test(val) && !input.closest('#dlm-panel, #dlm-popup')) {
+              return val;
+            }
+          }
+          return '';
+        })();
+
+        const waypoints = truckCity ? [truckCity, origin, dest] : [origin, dest];
+        const url = `https://www.google.com/maps/dir/${waypoints.map(encodeURIComponent).join('/')}`;
+        window.open(url, '_blank');
+      }, true);
+
+      wrapper.appendChild(rpmBtn);
+      wrapper.appendChild(mapsBtn);
     }
 
     document.querySelectorAll('button,a,[role="button"]').forEach(tryIntercept);
@@ -1126,47 +1728,58 @@ Thanks,
     let _expandTimer;
 
     function flushExpand() {
-      console.log('[LaneIQ DEBUG] flushExpand fired — pending nodes:', _pendingExpand.size);
+      console.log('[LaneIQ] flushExpand fired, pending nodes:', _pendingExpand.size);
       for (const node of _pendingExpand) {
         if (!node.isConnected || node.closest('[id^="dlm-"]')) continue;
         if (node.dataset.dlmExpandSeen) continue;
 
         const cls = (node.className || '').toLowerCase();
-        const isDatDetail = cls.includes('detail') || cls.includes('drawer') || cls.includes('expand');
+        const isDatDetail = cls.includes('details-container');
+        console.log('[LaneIQ] expansion node class:', cls, '| isDatDetail:', isDatDetail);
 
-        // Only check the DIRECT previous sibling — the selected row should
-        // immediately precede its detail element. Walking further back would
-        // match a highlighted row that wasn't actually clicked.
-        let row = null;
-
-        // Strategy 1: direct previous sibling of the inserted node only
-        const prevSib = node.previousElementSibling;
-        if (prevSib) {
-          if (prevSib.dataset.dlmOrigin) row = prevSib;
-          else { const r = prevSib.querySelector?.('[data-dlm-origin]'); if (r) row = r; }
-        }
-
-        // Strategy 2: previous sibling of parent / grandparent (handles wrapper divs),
-        // max 2 ancestor levels, 1 sibling check each — no unbounded walk.
-        if (!row) {
-          let ancestor = node.parentElement;
-          for (let depth = 0; depth < 2 && ancestor && !row; depth++) {
-            const sib = ancestor.previousElementSibling;
-            if (sib) {
-              if (sib.dataset.dlmOrigin) row = sib;
-              else { const r = sib.querySelector?.('[data-dlm-origin]'); if (r) row = r; }
-            }
-            ancestor = ancestor.parentElement;
-          }
-        }
+        const row = _lastClickedRow || null;
+        console.log('[LaneIQ] using row:', row?.dataset?.dlmOrigin);
 
         node.dataset.dlmExpandSeen = '1';
 
-        const o = row?.dataset.dlmOrigin;
-        const d = row?.dataset.dlmDest   || '';
+        let o = row?.dataset.dlmOrigin;
+        let d = row?.dataset.dlmDest   || '';
         const b = row?.dataset.dlmBroker || '';
 
-        if (o) {
+        // In laneiq mode with no CSV, read cities from city-state-container
+        // elements scoped to the detail node (or its nearest containing parent).
+        if (!o && licenseTier === 'pro' && useDB) {
+          // Find the tightest ancestor that contains exactly 2 city-state elements
+          let scope = node;
+          let cityEls = scope.querySelectorAll('[class*="city-state-container"]');
+          if (cityEls.length < 2) {
+            let ancestor = node.parentElement;
+            for (let i = 0; i < 5 && ancestor && ancestor !== document.body; i++) {
+              const found = ancestor.querySelectorAll('[class*="city-state-container"]');
+              if (found.length >= 2) { scope = ancestor; cityEls = found; break; }
+              ancestor = ancestor.parentElement;
+            }
+          }
+          console.log('[LaneIQ] city-state-container in scope:', cityEls.length,
+            [...cityEls].slice(0, 4).map(el => el.innerText.trim()));
+          if (cityEls.length >= 2) {
+            o = cityEls[0].innerText.trim();
+            d = cityEls[1].innerText.trim();
+          }
+        }
+
+        const expandKey = `${o}|${d}`;
+        const now = Date.now();
+        if (expandKey === _lastExpandKey && now - _lastExpandTime < 400) continue;
+        _lastExpandKey = expandKey;
+        _lastExpandTime = now;
+        if (!useCSV && !useDB) {
+          // both sources off — nothing to show
+        } else if (licenseTier === 'pro' && useDB && useCSV && o) {
+          showPanelDual(o, d, d ? findOD(o, d) : [], findO(o), b ? findBroker(b, o) : [], b, node);
+        } else if (licenseTier === 'pro' && useDB && !useCSV) {
+          showPanelFromAPI(o, d, node);
+        } else if (o) {
           showPanel(o, d, d ? findOD(o, d) : [], findO(o), b ? findBroker(b, o) : [], b);
         }
         // If no associated row found, do nothing — panel stays as-is.
@@ -1191,7 +1804,9 @@ Thanks,
           const cls = (typeof node.className === 'string'
             ? node.className
             : node.className?.baseVal || '').toLowerCase();
-          if (cls.includes('detail') || cls.includes('drawer') || cls.includes('expand')) {
+          if (cls.includes('details-container') || cls.includes('dat-load-details')) {
+            console.log('[LaneIQ] queued expansion node, class:', cls);
+            console.log('[LaneIQ] detail node HTML:', node.innerHTML.substring(0, 2000));
             _pendingExpand.add(node);
           }
         }
@@ -1260,10 +1875,10 @@ Thanks,
 
       // Reuse getDetailCities — it walks up from the email element, finding the
       // load's origin/dest from nearby data attributes or class-named elements.
-      const { origin, dest } = getDetailCities(parent);
       const onClick = e => {
         e.stopPropagation(); e.preventDefault();
-        sendEmail(email, origin, dest || 'destination');
+        const { origin: freshOrigin, dest: freshDest } = getDetailCities(e.currentTarget);
+        sendEmail(email, freshOrigin, freshDest || '');
         flashChipSent(e.currentTarget);
       };
 
@@ -1333,11 +1948,13 @@ Thanks,
       if (cls.includes('load') || cls.includes('detail') ||
           cls.includes('panel') || cls.includes('drawer') || cls.includes('card')) {
         const SKIP = /^(my account|origin|destination|filter|search|view|route|dat|login|dh|dh-d|dh-o|van|reefer|flat|step|dry)/i;
+        // Single-word DAT UI labels that appear immediately before a city name
+        const LABEL_PREFIX = /^\s*(?:Trip|Origin|Dest(?:ination)?|Pick(?:up)?|Del(?:ivery)?|From|To|Load|Drop|Stop)\s+/i;
         const re = /\b([A-Za-z][A-Za-z\s\.]{1,22}),\s*([A-Z]{2})\b/g;
         const cities = [];
         let m;
         while ((m = re.exec(scope.innerText)) !== null && cities.length < 3) {
-          const c = m[1].trim();
+          const c = m[1].trim().replace(LABEL_PREFIX, '').trim();
           if (c.length >= 2 && !SKIP.test(c)) cities.push(`${c}, ${m[2]}`);
         }
         if (cities.length >= 2)
@@ -1476,7 +2093,9 @@ Thanks,
         { type: 'getRoute', origin, dest, apiKey: mapsApiKey }
       ).catch(() => null).then(mainResp => {
         if (!mainResp || mainResp.error) {
-          mapContainer.innerHTML = `<span style="font-size:13px;color:#8e8e93">Map unavailable: ${mainResp?.error || 'no response'}</span>`;
+          mapContainer.innerHTML = `<span style="font-size:13px;color:#ff453a">Maps key error — check your API key in LaneIQ settings</span>`;
+          const distEl = q('stat-dist');
+          if (distEl) distEl.textContent = 'key error';
           return;
         }
 

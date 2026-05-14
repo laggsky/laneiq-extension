@@ -160,6 +160,16 @@
   // ── Render panel content from saved state ─────────────────────────────────
   function showContent(state, flash = false) {
     if (!state) return;
+    if (state.mode === 'api') {
+      const titleEl = document.getElementById('dlm-title');
+      const bodyEl  = document.getElementById('dlm-body');
+      if (titleEl) titleEl.innerHTML = `◈ ${esc(state.origin.split(',')[0].trim())}${state.dest ? ` <span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(state.dest.split(',')[0].trim())}` : ''}`;
+      bodyEl.innerHTML = state.renderedHTML;
+      panelBodyHTML = state.renderedHTML;
+      bodyEl.scrollTop = 0;
+      if (flash) { bodyEl.classList.remove('dlm-refreshed'); void bodyEl.offsetWidth; bodyEl.classList.add('dlm-refreshed'); }
+      return;
+    }
     const { origin, dest, odM = [], oM = [], bM = [], datBroker } = state;
 
     const titleEl = document.getElementById('dlm-title');
@@ -255,7 +265,10 @@
   }
 
   // ── DOM wiring ────────────────────────────────────────────────────────────
-  document.getElementById('dlm-close').addEventListener('click', () => window.close());
+  document.getElementById('dlm-close').addEventListener('click', () => {
+    chrome.storage.local.set({ panelPopped: false });
+    window.close();
+  });
 
   // When the floating window closes (any method), re-show the side panel in DAT
   window.addEventListener('unload', () => {

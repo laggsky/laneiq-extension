@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LaneIQ \u2014 DAT Load Matcher",
-  "version": "1.6",
+  "version": "1.10",
   "description": "Highlights DAT loads that match your freight history. Color-coded by tier: same lane + broker, same lane, or same origin.",
   "permissions": [
     "storage",
@@ -15,7 +15,8 @@
   "host_permissions": [
     "*://*.dat.com/*",
     "*://one.dat.com/*",
-    "https://maps.googleapis.com/*"
+    "https://maps.googleapis.com/*",
+    "https://laneiq-backend-production.up.railway.app/*"
   ],
   "icons": {
     "16":  "icons/icon16.png",

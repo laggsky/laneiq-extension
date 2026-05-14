@@ -1,4 +1,28 @@
+// Open the welcome page on first install (not on updates).
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') });
+  }
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // Open a URL and scroll to a hash anchor after the page fully loads.
+  // Doing this in the service worker avoids the popup-close race condition
+  // that kills chrome.tabs.onUpdated listeners registered in popup.js.
+  if (msg.type === 'openWithHash') {
+    const { baseUrl, hash } = msg;
+    chrome.tabs.create({ url: baseUrl }, (tab) => {
+      const listener = (tabId, info) => {
+        if (tabId === tab.id && info.status === 'complete') {
+          chrome.tabs.onUpdated.removeListener(listener);
+          chrome.tabs.update(tabId, { url: baseUrl + hash });
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+    return false;
+  }
+
   if (msg.type === 'openPanel') {
     chrome.windows.create({
       url:    chrome.runtime.getURL('panel.html'),

@@ -2,6 +2,63 @@
 // on any stored index that was built with an older format.
 const INDEX_VERSION = 2;
 
+// ─── License key validation ───────────────────────────────────────────────────
+// Replace this URL with your Railway deployment URL after deploying the backend.
+const VALIDATION_URL = 'https://laneiq-backend-production.up.railway.app/validate';
+const LICENSE_GRACE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Returns { valid: bool, cached: bool }
+// Exported for testing (CommonJS-safe: no-op if module is undefined).
+async function validateLicenseKey(key, forceRefresh = false) {
+  if (!key || typeof key !== 'string' || !key.trim()) {
+    return { valid: false, cached: false };
+  }
+  const trimmedKey = key.trim();
+
+  // Check grace period cache first (skipped on manual activation)
+  const stored = await chrome.storage.local.get(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier']);
+  const cachedKey = stored.licenseKey;
+  const cachedValid = stored.licenseValid;
+  const checkedAt = stored.licenseCheckedAt;
+
+  if (!forceRefresh && cachedKey === trimmedKey && cachedValid && checkedAt) {
+    const age = Date.now() - new Date(checkedAt).getTime();
+    if (age < LICENSE_GRACE_MS) {
+      return { valid: true, cached: true, tier: stored.licenseTier || 'solo' };
+    }
+  }
+
+  // Cache expired or missing — call backend
+  try {
+    const resp = await fetch(VALIDATION_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: trimmedKey }),
+    });
+    const data = await resp.json();
+    if (data.valid) {
+      await chrome.storage.local.set({
+        licenseKey: trimmedKey,
+        licenseValid: true,
+        licenseCheckedAt: new Date().toISOString(),
+        licenseTier: data.tier || 'solo',
+      });
+      return { valid: true, cached: false, tier: data.tier || 'solo' };
+    }
+    // Invalid key — clear cache
+    await chrome.storage.local.set({ licenseValid: false });
+    return { valid: false, cached: false, tier: null };
+  } catch {
+    // Network error — fail open only if we have a fresh (within grace period) valid cache
+    if (cachedKey === trimmedKey && cachedValid && checkedAt) {
+      const age = Date.now() - new Date(checkedAt).getTime();
+      if (age < LICENSE_GRACE_MS) return { valid: true, cached: true, tier: stored.licenseTier || 'solo' };
+    }
+    return { valid: false, cached: false, tier: null };
+  }
+}
+// exports assembled at bottom of file
+
 // ─── CSV Parser ───────────────────────────────────────────────────────────────
 function parseCSV(text) {
   // Split into logical rows respecting quoted fields that contain embedded newlines.
@@ -67,19 +124,25 @@ function norm(raw) {
 }
 
 // Extract state abbreviation from a raw city string e.g. "Charlotte, NC" → "nc"
+// Handles zip codes: "Charlotte, NC 28202" → "nc"
 function getState(raw) {
-  const m = String(raw).match(/([A-Z]{2})\s*$/);
+  const clean = String(raw).replace(/\b\d{5}(-\d{4})?\s*$/, '').trim();
+  const m = clean.match(/([A-Z]{2})\s*$/);
   return m ? m[1].toLowerCase() : '';
 }
 
 // Build an index key that normalizes the city name but preserves the state so
 // that "Columbia, MO" and "Columbia, PA" land in separate index buckets.
 // e.g. "S San Frncsco, CA" → "san francisco, ca"
+// Handles zip codes: "San Francisco, CA 94124" → "san francisco, ca"
 function normKey(raw) {
+  // Strip everything after the state abbreviation (zip codes, badge text, etc.)
+  // so "City, ST 12345" and "City, ST" produce the same key.
+  const clean = String(raw).replace(/(,\s*[A-Za-z]{2})\b.*$/, '$1').trim();
   // Extract state case-insensitively (CSV may emit "MO", "mo", or "Mo")
-  const stMatch = String(raw).match(/([A-Za-z]{2})\s*$/);
+  const stMatch = clean.match(/([A-Za-z]{2})\s*$/);
   const st   = stMatch ? stMatch[1].toLowerCase() : '';
-  const city = norm(raw);       // normalize city (abbreviations, punctuation, etc.)
+  const city = norm(clean);
   return st ? city + ', ' + st : city;
 }
 
@@ -99,23 +162,11 @@ function buildIndexesFromRows(rows, fileIdx) {
   const odIndex = {}, oIndex = {}, brokerIndex = {};
   let count = 0;
 
-  // ── Debug: show exact column names and first 5 raw rate values ──────────────
-  if (rows.length > 0) {
-    console.log('[LaneIQ] CSV columns detected:', Object.keys(rows[0]));
-    console.log('[LaneIQ] First 5 raw rows (rate check):',
-      rows.slice(0, 5).map(r => ({
-        'Load #':      r['Load #'],
-        Origin:        r['Origin'],
-        Destination:   r['Destination'],
-        'PU Date':     r['PU Date'],
-        Rate:          r['Rate'],
-      }))
-    );
-  }
-
   for (const row of rows) {
-    const origin  = (row['Origin']      || '').trim();
-    const dest    = (row['Destination'] || '').trim();
+    const origin  = (row['Origin']           || row['PickCity']        || row['Pick City']       ||
+                     row['Origin City']     || row['From City']        || row['Shipper City']     || '').trim();
+    const dest    = (row['Destination']      || row['DropCity']        || row['Drop City']        ||
+                     row['Destination City'] || row['To City']         || row['Consignee City']   || '').trim();
     const rateRaw = (row['Rate'] || row['Total'] || row['Gross'] || row['Revenue'] ||
                      row['Total Rate'] || row['All In'] || row['All-In'] ||
                      row['Pay'] || row['Line Haul'] || row['Linehaul'] || '').trim();
@@ -158,16 +209,6 @@ function buildIndexesFromRows(rows, fileIdx) {
       brokerIndex[nb].push(record);
     }
   }
-  // Log 5 sample records — confirm origin/dest are cities and rates are numbers
-  const sampleRecs = Object.values(odIndex).flat().slice(0, 5);
-  console.log('[LaneIQ] ✓ Indexed', count, 'records. Sample records:');
-  sampleRecs.forEach((r, i) => {
-    const rawRate = rows.find(row => (row['Load #']||'').trim() === r.loadNum)?.[
-      'Rate'] ?? '(no match)';
-    console.log(`  [${i+1}] origin="${r.origin}" dest="${r.destination}" rawRate="${rawRate}" parsedRate=${r.rate || 'N/A'} ok=${!isNaN(parseFloat(r.rate))}`);
-  });
-  console.log('[LaneIQ] Sample OD keys:', Object.keys(odIndex).slice(0, 5));
-
   return { odIndex, oIndex, brokerIndex, count };
 }
 
@@ -216,6 +257,23 @@ function countFromIndex(odIndex) {
   }
   return n;
 }
+
+// ─── Storage quota check ─────────────────────────────────────────────────────
+// Returns a warning string if storage is >= 90% full, null otherwise.
+// Exported for testing (CommonJS-safe: no-op if module is undefined).
+async function getStorageQuotaWarning() {
+  try {
+    const used = await chrome.storage.local.getBytesInUse(null);
+    const quota = chrome.storage.local.QUOTA_BYTES || 10 * 1024 * 1024;
+    const pct = used / quota;
+    if (pct >= 0.95) return 'Storage full — remove an existing file before uploading more.';
+    if (pct >= 0.90) return `Storage is ${Math.round(pct * 100)}% full — remove an older file before uploading to avoid data loss.`;
+    return null;
+  } catch {
+    return null; // getBytesInUse unavailable (e.g. in tests without Chrome API) — proceed
+  }
+}
+// exports assembled at bottom of file
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 function showError(msg) {
@@ -294,14 +352,77 @@ function updateGmailStatus(email, idx) {
   }
 }
 
+// ─── Exports (for unit testing in Node) ──────────────────────────────────────
+if (typeof module !== 'undefined') module.exports = { getStorageQuotaWarning, validateLicenseKey };
+
 // ─── Main ─────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', async () => {
+if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
+  // --- Activation screen gate ---
+  const licenseCheck = await chrome.storage.local.get(['licenseValid']);
+  if (!licenseCheck.licenseValid) {
+    document.getElementById('activation-screen').style.display = 'flex';
+    Array.from(document.body.children).forEach(el => {
+      if (el.id !== 'activation-screen') el.style.display = 'none';
+    });
+    const activationBtn = document.getElementById('activation-activate-btn');
+    const activationInput = document.getElementById('activation-key-input');
+    const activationStatus = document.getElementById('activation-status');
+    async function attemptActivation() {
+      const key = activationInput.value.trim();
+      if (!key) { activationStatus.textContent = 'Please enter a license key.'; return; }
+      activationBtn.textContent = 'Checking...';
+      activationBtn.disabled = true;
+      activationStatus.textContent = '';
+      const result = await validateLicenseKey(key, true);
+      if (result.valid) {
+        window.location.reload();
+      } else {
+        activationStatus.textContent = 'Invalid key — check your key and try again.';
+        activationBtn.textContent = 'Activate';
+        activationBtn.disabled = false;
+      }
+    }
+    activationBtn.addEventListener('click', attemptActivation);
+    activationInput.addEventListener('keydown', e => { if (e.key === 'Enter') attemptActivation(); });
+    return;
+  }
+
+  // Silent background re-validation — fires after gate passes, does not block UI.
+  (async function silentRevalidate() {
+    try {
+      const { licenseKey } = await chrome.storage.local.get(['licenseKey']);
+      if (!licenseKey) return;
+      const resp = await fetch(VALIDATION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: licenseKey }),
+      });
+      if (!resp.ok) return; // server/network error — fail open, don't punish user
+      const data = await resp.json();
+      if (!data.valid) {
+        await chrome.storage.local.set({ licenseValid: false });
+        window.location.reload();
+        return;
+      }
+      // Key still valid — sync tier and useDB if backend says they changed
+      const { licenseTier: storedTier, useDB: storedUseDB } =
+        await chrome.storage.local.get(['licenseTier', 'useDB']);
+      const backendTier = data.tier || 'solo';
+      const updates = {};
+      if (storedTier !== backendTier) updates.licenseTier = backendTier;
+      if (backendTier !== 'pro' && storedUseDB) updates.useDB = false;
+      if (Object.keys(updates).length) await chrome.storage.local.set(updates);
+    } catch {
+      // Network failure — fail open, never block a paying customer over connectivity
+    }
+  })();
+
   // Show loading state immediately while we wait for storage
   document.getElementById('statusBox').className = 'status-box loading';
   document.getElementById('statusVal').textContent = 'Loading…';
   document.getElementById('statusSub').textContent = 'Reading saved data';
 
-  const stored = await chrome.storage.local.get(['laneCount','filesMeta','gmailEmail','gmailIndex','senderEmail','senderGmailIndex','emailTemplate','userName','userCompany','mapsApiKey','emailSubject','odIndex','indexVersion']);
+  const stored = await chrome.storage.local.get(['laneCount','filesMeta','gmailEmail','gmailIndex','senderEmail','senderGmailIndex','emailTemplate','userName','userCompany','mapsApiKey','emailSubject','odIndex','indexVersion','licenseTier','useCSV','useDB']);
 
   // ── Version check — clear index if it was built with an older normKey ────────
   const SETTINGS_KEYS = ['gmailEmail','gmailIndex','senderEmail','senderGmailIndex','emailTemplate','userName','userCompany','mapsApiKey','emailSubject'];
@@ -325,7 +446,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (badCount >= 2) {
       await clearIndexKeepSettings('Previous index had company names instead of cities');
     } else {
-      console.log('[LaneIQ] ✓ Index format OK (v' + stored.indexVersion + '). Sample keys:', sample);
+      // Index format OK
       updateStatus(stored.laneCount, stored.filesMeta.length);
       renderFileList(stored.filesMeta);
     }
@@ -441,6 +562,14 @@ Thanks,
     templateStatus.className = 'gmail-status set';
   }
 
+  if (stored.emailSubject && !stored.emailSubject.includes('{origin}')) {
+    subjectInput.value  = DEFAULT_SUBJECT;
+    templateInput.value = DEFAULT_TEMPLATE;
+    await chrome.storage.local.set({ emailSubject: DEFAULT_SUBJECT, emailTemplate: DEFAULT_TEMPLATE });
+    templateStatus.textContent = 'Template reset to default';
+    templateStatus.className = 'gmail-status unset';
+  }
+
   document.getElementById('templateSave').addEventListener('click', async () => {
     const subj = subjectInput.value.trim() || DEFAULT_SUBJECT;
     const tmpl = templateInput.value.trim();
@@ -497,6 +626,17 @@ Thanks,
   });
 
   // File handling
+  document.getElementById('csvHelpToggle').addEventListener('click', () => {
+    const note = document.getElementById('csvHelpNote');
+    note.style.display = note.style.display === 'none' ? 'block' : 'none';
+    chrome.runtime.sendMessage({ type: 'openWithHash', baseUrl: 'https://laneiq.org', hash: '#prepare' });
+  });
+
+  document.getElementById('howItWorksLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    chrome.runtime.sendMessage({ type: 'openWithHash', baseUrl: 'https://laneiq.org', hash: '#how' });
+  });
+
   const dropZone  = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
   const progress  = document.getElementById('progress');
@@ -511,6 +651,11 @@ Thanks,
   fileInput.addEventListener('change', e => processFiles(Array.from(e.target.files)));
 
   // ── Maps API Key ─────────────────────────────────────────────────────────
+  document.getElementById('mapsHelpToggle').addEventListener('click', () => {
+    const note = document.getElementById('mapsHelpNote');
+    note.style.display = note.style.display === 'none' ? 'block' : 'none';
+  });
+
   const mapsKeyInput  = document.getElementById('mapsKeyInput');
   const mapsKeyStatus = document.getElementById('mapsKeyStatus');
   if (stored.mapsApiKey) {
@@ -545,10 +690,22 @@ Thanks,
     window.close();
   });
 
+  document.getElementById('setupHelpLink').addEventListener('click', (e) => {
+    e.preventDefault();
+    chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html?screen=2') });
+  });
+
   // ── Process CSV files ────────────────────────────────────────────────────────
   async function processFiles(newFiles) {
     if (!newFiles.length) return;
     const csvFiles = newFiles.filter(f => f.name.endsWith('.csv'));
+
+    // Quota check — warn before writing, not after a partial write failure
+    const quotaWarning = await getStorageQuotaWarning();
+    if (quotaWarning) {
+      showError(quotaWarning);
+      return;
+    }
     if (!csvFiles.length) { showError('Please upload CSV files only.'); return; }
     document.getElementById('errorMsg').style.display = 'none';
     const statusBox = document.getElementById('statusBox');
@@ -598,7 +755,7 @@ Thanks,
 
         if (count === 0) {
           progress.style.display = 'none';
-          showError(`No lanes found in "${file.name}". Check that your CSV has columns named: Origin, Destination, Load #, PU Date, Rate.`);
+          showError(`No lanes found in "${file.name}". Origin column not found — expected "Origin", "PickCity", "Pick City", "Origin City", "From City", or "Shipper City". Destination: "Destination", "DropCity", "Drop City", "Destination City", "To City", or "Consignee City".`);
           return;
         }
 
@@ -641,5 +798,119 @@ Thanks,
       showError('Error: ' + err.message);
       progress.style.display = 'none';
     }
+  }
+
+  // ── Data source toggles (Pro only) ───────────────────────────────────────────
+  const dataSourceSection = document.getElementById('dataSourceSection');
+  const useCSVToggle = document.getElementById('useCSVToggle');
+  const useDBToggle  = document.getElementById('useDBToggle');
+
+  function applyDataSource(useCSV, useDB) {
+    const status = document.getElementById('dataSourceStatus');
+    if (useCSV && useDB)  status.textContent = 'Both sources active — CSV takes priority';
+    else if (useCSV)      status.textContent = 'My CSV — your own freight history';
+    else if (useDB)       status.textContent = 'LaneIQ Database — market-wide rate data';
+    else                  status.textContent = 'No data source selected';
+  }
+
+  chrome.storage.local.get(['useCSV', 'useDB'], stored => {
+    const useCSV = stored.useCSV !== false;
+    const useDB  = stored.useDB  === true;
+    useCSVToggle.checked = useCSV;
+    useDBToggle.checked  = useDB;
+    applyDataSource(useCSV, useDB);
+  });
+
+  useCSVToggle.addEventListener('change', async () => {
+    await chrome.storage.local.set({ useCSV: useCSVToggle.checked });
+    applyDataSource(useCSVToggle.checked, useDBToggle.checked);
+  });
+
+  useDBToggle.addEventListener('change', async () => {
+    const { licenseTier: currentTier } = await chrome.storage.local.get('licenseTier');
+    if (currentTier !== 'pro') {
+      useDBToggle.checked = false;
+      document.getElementById('dataSourceStatus').textContent = '🔒 Pro feature — enter your license key above to unlock';
+      document.getElementById('dataSourceStatus').style.color = '#F59E0B';
+      return;
+    }
+    await chrome.storage.local.set({ useDB: useDBToggle.checked });
+    applyDataSource(useCSVToggle.checked, useDBToggle.checked);
+  });
+
+  if (dataSourceSection) {
+    dataSourceSection.style.display = 'block';
+  }
+
+  // ── License key ──────────────────────────────────────────────────────────────
+  const licenseInput  = document.getElementById('licenseInput');
+  const licenseStatus = document.getElementById('licenseStatus');
+  const licenseSave   = document.getElementById('licenseSave');
+
+  if (licenseInput && licenseSave && licenseStatus) {
+    // Show current saved key (masked) and status
+    const saved = await chrome.storage.local.get(['licenseKey', 'licenseValid', 'licenseCheckedAt']);
+    if (saved.licenseKey) {
+      licenseInput.placeholder = saved.licenseKey.slice(0, 8) + '••••••••';
+      const age = saved.licenseCheckedAt ? Date.now() - new Date(saved.licenseCheckedAt).getTime() : Infinity;
+      const fresh = age < LICENSE_GRACE_MS;
+      if (saved.licenseValid && fresh) {
+        licenseStatus.textContent = '✓ License active';
+        licenseStatus.className = 'gmail-status set';
+        document.getElementById('manageSubBtn').style.display = 'inline-block';
+      } else if (saved.licenseValid && !fresh) {
+        licenseStatus.textContent = '⚠ License cached — reconnect to verify';
+        licenseStatus.className = 'gmail-status unset';
+      } else {
+        licenseStatus.textContent = '✗ License invalid';
+        licenseStatus.className = 'gmail-status unset';
+      }
+    }
+
+    document.getElementById('manageSubBtn').addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://billing.stripe.com/p/login/7sY9AScHv3lMaKY2GZ5EY00' });
+    });
+
+    document.getElementById('licenseClear').addEventListener('click', async () => {
+      await chrome.storage.local.remove(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier', 'useCSV', 'useDB']);
+      licenseInput.value = '';
+      licenseInput.placeholder = 'LANEIQ-XXXX-XXXX-XXXX';
+      licenseStatus.textContent = 'License cleared';
+      licenseStatus.className = 'gmail-status unset';
+      setTimeout(() => {
+        licenseStatus.textContent = 'Enter your license key to activate LaneIQ';
+      }, 1500);
+    });
+
+    licenseSave.addEventListener('click', async () => {
+      const key = licenseInput.value.trim();
+      if (!key) { licenseStatus.textContent = 'Paste your license key'; return; }
+      licenseStatus.textContent = 'Checking…';
+      licenseStatus.className = 'gmail-status';
+      const { valid, tier } = await validateLicenseKey(key, true);
+      if (valid) {
+        licenseStatus.textContent = `✓ License active${tier === 'pro' ? ' · Pro' : ''}`;
+        licenseStatus.className = 'gmail-status set';
+        document.getElementById('manageSubBtn').style.display = 'inline-block';
+        licenseInput.value = '';
+        licenseInput.placeholder = key.slice(0, 8) + '••••••••';
+        // Show data source toggles for Pro; default to LaneIQ DB on first activation
+        if (tier === 'pro' && dataSourceSection) {
+          const { useCSV: existingCSV, useDB: existingDB } = await chrome.storage.local.get(['useCSV', 'useDB']);
+          if (existingCSV === undefined && existingDB === undefined) {
+            await chrome.storage.local.set({ useCSV: false, useDB: true });
+          }
+          const useCSV = existingCSV === undefined ? false : !!existingCSV;
+          const useDB  = existingDB  === undefined ? true  : !!existingDB;
+          useCSVToggle.checked = useCSV;
+          useDBToggle.checked  = useDB;
+          applyDataSource(useCSV, useDB);
+          dataSourceSection.style.display = 'block';
+        }
+      } else {
+        licenseStatus.textContent = '✗ Invalid key — check your email or contact support';
+        licenseStatus.className = 'gmail-status unset';
+      }
+    });
   }
 });
