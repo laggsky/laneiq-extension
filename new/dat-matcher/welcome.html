@@ -1,0 +1,1454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Welcome to LaneIQ</title>
+<style>
+  :root {
+    --orange: #ff6b2b;
+    --orange-dark: #e85a1f;
+    --orange-soft: #fff4ee;
+    --orange-shadow: rgba(255, 107, 43, .35);
+    --ink: #1d1d1f;
+    --ink-soft: #6e6e73;
+    --ink-faint: #aeaeb2;
+    --line: #e5e5ea;
+    --bg: #fafafa;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "SF Pro Text", BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* ─── Slide deck ──────────────────────────────────────────────────── */
+  .deck {
+    display: flex;
+    width: 600vw;
+    height: 100vh;
+    transform: translateX(0);
+    transition: transform .55s cubic-bezier(.22, 1, .36, 1);
+  }
+  .deck.show-2 { transform: translateX(-100vw); }
+  .deck.show-3 { transform: translateX(-200vw); }
+  .deck.show-4 { transform: translateX(-300vw); }
+  .deck.show-5 { transform: translateX(-400vw); }
+  .deck.show-6 { transform: translateX(-500vw); }
+
+  .screen {
+    width: 100vw;
+    height: 100vh;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    overflow-y: auto;
+    position: relative;
+  }
+  .screen .inner {
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity .5s ease .15s, transform .5s ease .15s;
+    width: 100%;
+  }
+  .screen.active .inner {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* Subtle back link in the top-left of screens 2–6 */
+  .back-link {
+    position: absolute;
+    top: 22px;
+    left: 24px;
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    padding: 6px 8px;
+    border-radius: 6px;
+    transition: color .15s, background .15s;
+    z-index: 5;
+  }
+  .back-link:hover {
+    color: var(--ink);
+    background: rgba(0, 0, 0, .04);
+  }
+
+  /* ─── Shared brand bar ────────────────────────────────────────────── */
+  .brand-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 28px;
+  }
+  .brand-mark-sm {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-dark) 100%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 800;
+    font-size: 15px;
+    box-shadow: 0 4px 10px rgba(255, 107, 43, .28);
+  }
+  .brand-name-sm {
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -.01em;
+  }
+
+  /* ─── Screen 1 — Welcome ──────────────────────────────────────────── */
+  #screen1 .inner { max-width: 540px; text-align: center; }
+  .logo-mark {
+    width: 88px; height: 88px;
+    margin: 0 auto 28px;
+    border-radius: 22px;
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-dark) 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-weight: 800;
+    font-size: 44px;
+    letter-spacing: -.04em;
+    box-shadow: 0 18px 36px rgba(255, 107, 43, .35), 0 4px 10px rgba(0, 0, 0, .08);
+    position: relative;
+  }
+  .logo-mark::before {
+    content: '';
+    position: absolute;
+    inset: 4px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, rgba(255,255,255,.18) 0%, rgba(255,255,255,0) 50%);
+    pointer-events: none;
+  }
+  .wordmark {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin-bottom: 48px;
+  }
+  h1.hero {
+    font-size: 46px;
+    line-height: 1.06;
+    font-weight: 700;
+    letter-spacing: -.025em;
+    margin: 0 0 18px;
+  }
+  .subtext {
+    font-size: 18px;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    margin: 0 auto 44px;
+    max-width: 470px;
+  }
+  .subtext .em { color: var(--ink); font-weight: 600; }
+
+  /* ─── Shared title + sub ──────────────────────────────────────────── */
+  h2.title {
+    font-size: 32px;
+    line-height: 1.12;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    margin: 0 0 8px;
+  }
+  h2.title .accent { color: var(--orange); }
+  .sub {
+    font-size: 15px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+    margin: 0 0 32px;
+    max-width: 580px;
+  }
+
+  /* ─── Setup-style step card (used on screens 2, 3, 4) ─────────────── */
+  .setup-card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 12px 28px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .05), 0 2px 6px rgba(0, 0, 0, .04);
+    margin-bottom: 28px;
+  }
+  .setup-step {
+    display: flex;
+    gap: 16px;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .setup-step:last-child { border-bottom: none; }
+  .setup-num {
+    flex-shrink: 0;
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    background: var(--orange-soft);
+    color: var(--orange);
+    font-weight: 700;
+    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .setup-body { flex: 1; padding-top: 4px; }
+  .setup-title {
+    font-weight: 600;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--ink);
+  }
+  .setup-title .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: var(--orange-soft);
+    color: var(--orange);
+    font-weight: 600;
+    font-size: 13px;
+    margin: 0 1px;
+  }
+  .setup-title .link {
+    color: var(--orange);
+    font-weight: 600;
+    text-decoration: none;
+  }
+  .setup-title .link:hover { text-decoration: underline; }
+  .optional-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--ink-soft);
+    background: #f1f1f4;
+    padding: 2px 7px;
+    border-radius: 5px;
+    margin-left: 6px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    vertical-align: middle;
+  }
+
+  /* Soft gray tip note (Email screen) */
+  .tip-note {
+    padding: 12px 14px;
+    background: rgba(0, 0, 0, .03);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-size: 13px;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    margin-bottom: 28px;
+  }
+  .tip-note strong { color: var(--ink); font-weight: 600; }
+
+  /* Gmail compose mockup (Email screen) */
+  .gmail-compose {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, .10), 0 2px 6px rgba(0, 0, 0, .06);
+    margin: 4px 0 18px;
+  }
+  .gmail-header {
+    background: #404040;
+    color: #fff;
+    padding: 9px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .005em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .gmail-header-actions {
+    display: inline-flex;
+    gap: 14px;
+    font-size: 13px;
+    color: #cfcfcf;
+    font-weight: 400;
+  }
+  .gmail-field {
+    display: flex;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--ink);
+    align-items: baseline;
+    gap: 10px;
+  }
+  .gmail-label {
+    color: var(--ink-soft);
+    font-weight: 500;
+    flex-shrink: 0;
+    min-width: 60px;
+  }
+  .gmail-value { flex: 1; word-break: break-word; }
+  .gmail-body {
+    padding: 18px 16px 22px;
+    font-size: 13.5px;
+    color: var(--ink);
+    line-height: 1.7;
+    white-space: pre-wrap;
+  }
+  .gmail-compose .hl {
+    color: #ff6b2b;
+    font-weight: 700;
+  }
+
+  /* Two-row legend below mockup */
+  .field-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 18px;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .field-legend .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-soft);
+    flex-wrap: wrap;
+  }
+  .field-legend .row strong {
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .field-legend .row .vars {
+    color: #ff6b2b;
+    font-weight: 600;
+  }
+
+  /* RPM Calculator mockup (Maps screen) */
+  .rpm-mockup {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .10), 0 2px 6px rgba(0, 0, 0, .05);
+    margin: 4px 0 12px;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+  }
+  .rpm-map-side {
+    padding: 18px 20px;
+    border-right: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .rpm-map-svg {
+    width: 100%;
+    height: auto;
+    display: block;
+    margin-bottom: 12px;
+  }
+  .rpm-map-stats {
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    text-align: center;
+    line-height: 1.55;
+  }
+  .rpm-calc {
+    padding: 18px 22px;
+  }
+  .rpm-calc-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  .rpm-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, .04);
+  }
+  .rpm-row:last-child { border-bottom: none; }
+  .rpm-row .k {
+    color: var(--ink-soft);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    font-weight: 500;
+  }
+  .rpm-row .v {
+    color: var(--ink);
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .rpm-row .v.hi-orange {
+    color: var(--orange);
+    font-weight: 800;
+    font-size: 14.5px;
+  }
+  .rpm-row .v.hi-green {
+    color: #16a34a;
+    font-weight: 800;
+    font-size: 14.5px;
+  }
+  .rpm-caption {
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    font-style: italic;
+    margin-bottom: 28px;
+    line-height: 1.5;
+  }
+
+  /* Orange warm note (Maps screen) */
+  .warm-note {
+    padding: 14px 16px;
+    background: var(--orange-soft);
+    border: 1px solid #ffd4bf;
+    border-radius: 10px;
+    font-size: 13.5px;
+    color: var(--ink);
+    line-height: 1.55;
+    margin-bottom: 28px;
+  }
+  .warm-note strong { color: var(--orange-dark); font-weight: 700; }
+
+  /* ─── Screen 2 — Setup ────────────────────────────────────────────── */
+  #screen2 .inner { max-width: 760px; }
+
+  /* CSV columns section (under Setup) */
+  .csv-section { margin-top: 36px; }
+  .csv-heading {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 0 0 14px;
+    letter-spacing: -.01em;
+  }
+  .csv-scroll-hint {
+    text-align: center;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--orange);
+    margin-bottom: 8px;
+    letter-spacing: .02em;
+  }
+  .csv-table-wrap {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .05), 0 1px 3px rgba(0, 0, 0, .03);
+    background: #fff;
+  }
+  .csv-table-wrap::-webkit-scrollbar { height: 10px; }
+  .csv-table-wrap::-webkit-scrollbar-track {
+    background: #e5e7eb;
+    border-radius: 5px;
+  }
+  .csv-table-wrap::-webkit-scrollbar-thumb {
+    background: var(--orange);
+    border-radius: 5px;
+  }
+  .csv-table-wrap::-webkit-scrollbar-thumb:hover { background: var(--orange-dark); }
+  .csv-table-wrap {
+    scrollbar-width: thin;
+    scrollbar-color: var(--orange) #e5e7eb;
+  }
+  .csv-table {
+    border-collapse: collapse;
+    font-size: 12.5px;
+    min-width: 100%;
+    white-space: nowrap;
+  }
+  .csv-table th {
+    background: linear-gradient(180deg, var(--orange) 0%, var(--orange-dark) 100%);
+    color: #fff;
+    font-weight: 700;
+    text-align: left;
+    padding: 11px 14px;
+    letter-spacing: -.005em;
+    border-right: 1px solid rgba(255, 255, 255, .18);
+  }
+  .csv-table th:last-child { border-right: none; }
+  .csv-table td {
+    padding: 12px 14px;
+    color: var(--ink);
+    border-right: 1px solid var(--line);
+    border-top: 1px solid var(--line);
+  }
+  .csv-table td:last-child { border-right: none; }
+  .csv-table tbody tr:nth-child(even) td { background: #fafafa; }
+
+  .csv-note {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: var(--orange-soft);
+    border: 1px solid #ffd4bf;
+    border-radius: 10px;
+    font-size: 13.5px;
+    color: var(--ink);
+    line-height: 1.55;
+  }
+  .csv-note strong { color: var(--orange-dark); font-weight: 700; }
+
+  .tier-list {
+    list-style: none;
+    margin: 18px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .tier-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 14px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-size: 13.5px;
+    line-height: 1.4;
+  }
+  .tier-emoji { font-size: 16px; flex-shrink: 0; }
+  .tier-cols { font-weight: 600; color: var(--ink); }
+  .tier-arrow { color: var(--ink-faint); font-weight: 500; margin: 0 2px; }
+  .tier-desc { color: var(--ink-soft); }
+
+  .csv-warning {
+    margin-top: 14px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    font-style: italic;
+  }
+  .csv-warning strong { color: var(--ink); font-style: normal; font-weight: 700; }
+
+  /* ─── Screen 3 — Email Template ───────────────────────────────────── */
+  #screen3 .inner { max-width: 640px; }
+
+  /* ─── Screen 4 — Google Maps API Key ──────────────────────────────── */
+  #screen4 .inner { max-width: 640px; }
+
+  /* ─── Screen 5 — Pick a plan ──────────────────────────────────────── */
+  #screen5 .inner { max-width: 880px; }
+  .plans {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-bottom: 14px;
+  }
+  .plan {
+    position: relative;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 28px 26px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .05), 0 1px 3px rgba(0, 0, 0, .04);
+    display: flex;
+    flex-direction: column;
+  }
+  .plan.recommended {
+    border: 2px solid var(--orange);
+    background: linear-gradient(180deg, #fffaf6 0%, #fff 60%);
+    box-shadow: 0 12px 28px rgba(255, 107, 43, .14), 0 2px 6px rgba(0, 0, 0, .05);
+  }
+  .plan-tag {
+    position: absolute;
+    top: -11px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--orange);
+    color: #fff;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 100px;
+    box-shadow: 0 4px 10px rgba(255, 107, 43, .35);
+  }
+  .plan-name {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 4px;
+    letter-spacing: -.01em;
+  }
+  .plan-price {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .plan-price .amt {
+    font-size: 38px;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    color: var(--ink);
+  }
+  .plan-price .per {
+    font-size: 14px;
+    color: var(--ink-soft);
+    font-weight: 500;
+  }
+  .plan-tag-line {
+    font-size: 14px;
+    color: var(--ink);
+    font-weight: 600;
+    margin-bottom: 18px;
+    line-height: 1.4;
+  }
+  .plan-feats {
+    list-style: none;
+    margin: 0 0 22px;
+    padding: 0;
+    flex: 1;
+  }
+  .plan-feats li {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    padding: 5px 0;
+  }
+  .plan-feats li::before {
+    content: '✓';
+    color: var(--orange);
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  .plan-note {
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    font-style: italic;
+    margin: 0 0 16px;
+    padding: 10px 12px;
+    background: rgba(255, 107, 43, .06);
+    border-left: 2px solid var(--orange);
+    border-radius: 6px;
+  }
+  .plan-cta {
+    display: block;
+    text-align: center;
+    background: #fff;
+    color: var(--orange);
+    border: 2px solid var(--orange);
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 15px;
+    padding: 12px 20px;
+    border-radius: 10px;
+    transition: background .15s, color .15s, box-shadow .15s;
+  }
+  .plan.recommended .plan-cta {
+    background: linear-gradient(180deg, var(--orange) 0%, var(--orange-dark) 100%);
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 8px 20px var(--orange-shadow), 0 1px 3px rgba(0, 0, 0, .08);
+  }
+  .plan-cta:hover { background: var(--orange-soft); }
+  .plan.recommended .plan-cta:hover {
+    background: linear-gradient(180deg, var(--orange-dark) 0%, #cf4a14 100%);
+    box-shadow: 0 12px 26px rgba(255, 107, 43, .42), 0 2px 5px rgba(0, 0, 0, .1);
+  }
+  .trial-line {
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    margin-top: 10px;
+  }
+  .skip-link {
+    display: block;
+    text-align: center;
+    margin: 18px auto 0;
+    font-size: 13px;
+    color: var(--ink-soft);
+    text-decoration: none;
+    cursor: pointer;
+    background: none;
+    border: none;
+    font-family: inherit;
+    padding: 8px 14px;
+    border-radius: 6px;
+    transition: color .15s, background .15s;
+  }
+  .skip-link:hover {
+    color: var(--orange);
+    background: rgba(0, 0, 0, .03);
+  }
+
+  /* ─── Screen 6 — Pin it ───────────────────────────────────────────── */
+  #screen6 .inner { max-width: 640px; }
+  .pin-card {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 26px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .05), 0 2px 6px rgba(0, 0, 0, .04);
+    margin-bottom: 24px;
+  }
+  .pin-steps { list-style: none; margin: 0; padding: 0; }
+  .pin-step {
+    display: flex;
+    gap: 16px;
+    padding: 13px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .pin-step:last-child { border-bottom: none; padding-bottom: 0; }
+  .pin-step:first-child { padding-top: 0; }
+  .pin-num {
+    flex-shrink: 0;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--orange-soft);
+    color: var(--orange);
+    font-weight: 700;
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .pin-title {
+    font-weight: 600;
+    font-size: 14.5px;
+    margin-bottom: 3px;
+    line-height: 1.4;
+  }
+  .pin-detail {
+    font-size: 13px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  .pin-detail .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: #f1f1f4;
+    color: var(--ink);
+    font-weight: 600;
+    font-size: 12.5px;
+  }
+  .visual { margin: 22px 0 4px; display: flex; justify-content: center; }
+  .browser-frame {
+    width: 100%;
+    max-width: 420px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .06);
+  }
+  .browser-bar {
+    background: #f5f5f7;
+    border-bottom: 1px solid var(--line);
+    padding: 9px 11px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #ddd; }
+  .dot.r { background: #ff5f57; }
+  .dot.y { background: #febc2e; }
+  .dot.g { background: #28c840; }
+  .browser-spacer { flex: 1; }
+  .browser-icons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 7px;
+  }
+  .puzzle-highlight { position: relative; }
+  .puzzle-highlight::after {
+    content: '';
+    position: absolute;
+    inset: -6px;
+    border: 2px solid var(--orange);
+    border-radius: 8px;
+    animation: pulse 1.8s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: .55; transform: scale(1.08); }
+  }
+  .browser-body { padding: 16px 14px; }
+  .ext-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--orange-soft);
+    border: 1px solid #ffd4bf;
+  }
+  .ext-row + .ext-row { margin-top: 6px; }
+  .ext-mini {
+    width: 20px; height: 20px;
+    border-radius: 5px;
+    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-dark) 100%);
+    color: #fff;
+    font-weight: 800;
+    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .ext-name {
+    font-size: 13px;
+    font-weight: 600;
+    flex: 1;
+  }
+  .pin-btn {
+    color: var(--orange);
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 5px;
+    background: #fff;
+    border: 1px solid #ffd4bf;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  /* ─── Primary CTA button ──────────────────────────────────────────── */
+  .cta {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-top: 8px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: linear-gradient(180deg, var(--orange) 0%, var(--orange-dark) 100%);
+    color: #fff;
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -.005em;
+    padding: 16px 36px;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    box-shadow: 0 10px 24px var(--orange-shadow), 0 2px 4px rgba(0, 0, 0, .08);
+    transition: transform .15s, box-shadow .15s;
+    font-family: inherit;
+  }
+  .btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 14px 30px rgba(255, 107, 43, .42), 0 2px 5px rgba(0, 0, 0, .1);
+  }
+  .btn:active {
+    transform: translateY(0);
+    box-shadow: 0 4px 10px rgba(255, 107, 43, .3);
+  }
+  .btn .arrow {
+    font-size: 20px;
+    line-height: 1;
+    transition: transform .2s ease;
+  }
+  .btn:hover .arrow { transform: translateX(3px); }
+  .footer-note {
+    text-align: center;
+    margin-top: 14px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+
+  /* ─── Page indicator dots ─────────────────────────────────────────── */
+  .dots {
+    position: fixed;
+    bottom: 24px;
+    left: 0; right: 0;
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    z-index: 10;
+  }
+  .pdot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--ink-faint);
+    opacity: .4;
+    transition: opacity .25s, background .25s, width .25s, border-radius .25s;
+  }
+  .pdot.active {
+    background: var(--orange);
+    opacity: 1;
+    width: 22px;
+    border-radius: 4px;
+  }
+
+  /* ─── Mobile ──────────────────────────────────────────────────────── */
+  @media (max-width: 720px) {
+    h1.hero { font-size: 34px; }
+    h2.title { font-size: 26px; }
+    .subtext { font-size: 16px; }
+    .plans { grid-template-columns: 1fr; }
+    .plan-price .amt { font-size: 32px; }
+    .logo-mark { width: 72px; height: 72px; font-size: 36px; }
+    .setup-card { padding: 8px 22px; }
+    .pin-card { padding: 22px; }
+    .rpm-mockup { grid-template-columns: 1fr; }
+    .rpm-map-side { border-right: none; border-bottom: 1px solid var(--line); }
+  }
+</style>
+</head>
+<body>
+
+  <div class="deck" id="deck">
+
+    <!-- ─── Screen 1 — Welcome ─────────────────────────────────────── -->
+    <section class="screen active" id="screen1">
+      <div class="inner">
+        <div class="logo-mark">L</div>
+        <div class="wordmark">LaneIQ</div>
+
+        <h1 class="hero">Know Before You Negotiate</h1>
+        <p class="subtext">
+          See <span class="em">what that lane actually paid</span> — right inside DAT, before you pick up the phone.
+        </p>
+
+        <div class="cta">
+          <button class="btn" data-go="2">
+            Get Started
+            <span class="arrow">→</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Screen 2 — Setup ───────────────────────────────────────── -->
+    <section class="screen" id="screen2">
+      <button class="back-link" data-go="1">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">L</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">Upload Your <span class="accent">Rate History</span></h2>
+        <p class="sub">LaneIQ matches loads against your past freight to highlight what each lane is really worth.</p>
+
+        <div class="csv-section">
+          <div class="csv-heading">Your CSV must use these exact column names:</div>
+          <div class="csv-scroll-hint">← Scroll to see all columns →</div>
+          <div class="csv-table-wrap">
+            <table class="csv-table">
+              <thead>
+                <tr>
+                  <th>Load #</th>
+                  <th>Origin</th>
+                  <th>PU Date</th>
+                  <th>Destination</th>
+                  <th>Rate</th>
+                  <th>Weight / Pallets / FT</th>
+                  <th>Pickup Company + Full Address</th>
+                  <th>Delivery Company + Full Address</th>
+                  <th>Commodity</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>12345</td>
+                  <td>Sacramento, CA</td>
+                  <td>01/15/2024</td>
+                  <td>Chicago, IL</td>
+                  <td>$4,500.00</td>
+                  <td>42,000 LB</td>
+                  <td>ABC Freight, 123 Main St, Sacramento CA</td>
+                  <td>XYZ Logistics, 456 Oak Ave, Chicago IL</td>
+                  <td>General Freight</td>
+                </tr>
+                <tr>
+                  <td>12346</td>
+                  <td>Fresno, CA</td>
+                  <td>02/03/2024</td>
+                  <td>Dallas, TX</td>
+                  <td>$3,200.00</td>
+                  <td>38,000 LB</td>
+                  <td>Farm Fresh Co, 789 Valley Rd, Fresno CA</td>
+                  <td>Texas Depot, 321 Commerce St, Dallas TX</td>
+                  <td>Food &amp; Beverage</td>
+                </tr>
+                <tr>
+                  <td>12347</td>
+                  <td>Los Angeles, CA</td>
+                  <td>02/18/2024</td>
+                  <td>Atlanta, GA</td>
+                  <td>$5,800.00</td>
+                  <td>44,000 LB</td>
+                  <td>LA Warehouse, 555 Harbor Blvd, Los Angeles CA</td>
+                  <td>ATL Distribution, 900 Peach St, Atlanta GA</td>
+                  <td>Refrigerated</td>
+                </tr>
+                <tr>
+                  <td>12348</td>
+                  <td>Portland, OR</td>
+                  <td>03/05/2024</td>
+                  <td>Chicago, IL</td>
+                  <td>$4,100.00</td>
+                  <td>40,000 LB</td>
+                  <td>Pacific Goods, 222 River Rd, Portland OR</td>
+                  <td>Midwest Hub, 777 Lake Ave, Chicago IL</td>
+                  <td>General Freight</td>
+                </tr>
+                <tr>
+                  <td>12349</td>
+                  <td>Seattle, WA</td>
+                  <td>03/22/2024</td>
+                  <td>New York, NY</td>
+                  <td>$6,200.00</td>
+                  <td>45,000 LB</td>
+                  <td>Northwest Co, 444 Pine St, Seattle WA</td>
+                  <td>East Coast LLC, 111 Broadway, New York NY</td>
+                  <td>Electronics</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="csv-note">
+            Don't worry if your CSV doesn't have all these columns — LaneIQ works with whatever you have.
+            <strong>Only Origin is required.</strong> The more columns you include, the smarter the matching gets.
+          </div>
+
+          <ul class="tier-list">
+            <li class="tier-row">
+              <span class="tier-emoji">🔵</span>
+              <span class="tier-cols">Origin only</span>
+              <span class="tier-arrow">→</span>
+              <span class="tier-desc">Blue highlights (basic origin matching)</span>
+            </li>
+            <li class="tier-row">
+              <span class="tier-emoji">🟢</span>
+              <span class="tier-cols">Origin + Destination</span>
+              <span class="tier-arrow">→</span>
+              <span class="tier-desc">Green / Yellow highlights (lane matching)</span>
+            </li>
+          </ul>
+
+          <div class="csv-warning">
+            <strong>Column names must match exactly</strong> — including spaces and capitalization.
+          </div>
+        </div>
+
+        <div class="setup-card" style="margin-top: 32px">
+          <div class="setup-step">
+            <span class="setup-num">1</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Upload your CSV rate history in the extension popup
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="cta">
+          <button class="btn" data-go="3">
+            Next
+            <span class="arrow">→</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Screen 3 — Email Template ──────────────────────────────── -->
+    <section class="screen" id="screen3">
+      <button class="back-link" data-go="2">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">L</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">Set Up Your <span class="accent">Email Template</span></h2>
+        <p class="sub">LaneIQ adds a one-click email button to every load row on DAT. When clicked, it opens Gmail with a pre-filled message to the broker — ready to send in seconds.</p>
+
+        <div class="setup-card">
+          <div class="setup-step">
+            <span class="setup-num">1</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Click any highlighted load row on DAT to open the rate panel
+              </div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <span class="setup-num">2</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Click the email button next to the broker contact
+              </div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <span class="setup-num">3</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Gmail opens with the broker's email, subject line, and your message pre-filled
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="gmail-compose" role="img" aria-label="Gmail compose preview">
+          <div class="gmail-header">
+            <span>New Message</span>
+            <span class="gmail-header-actions">
+              <span aria-hidden="true">⤢</span>
+              <span aria-hidden="true">✕</span>
+            </span>
+          </div>
+          <div class="gmail-field">
+            <span class="gmail-label">To</span>
+            <span class="gmail-value">broker@example.com</span>
+          </div>
+          <div class="gmail-field">
+            <span class="gmail-label">Subject</span>
+            <span class="gmail-value">Load Inquiry – <span class="hl">Sacramento, CA</span> → <span class="hl">Chicago, IL</span></span>
+          </div>
+          <div class="gmail-body">Hi,
+
+My name is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. I'm reaching out about your load from <span class="hl">Sacramento, CA</span> to <span class="hl">Chicago, IL</span> posted on DAT today.</div>
+        </div>
+
+        <div class="field-legend">
+          <div class="row">
+            <strong>🔄 Auto-filled:</strong>
+            <span class="vars">origin, destination</span>
+          </div>
+          <div class="row">
+            <strong>✏️ Set once in popup:</strong>
+            <span class="vars">your name, company name</span>
+          </div>
+        </div>
+
+        <div class="tip-note">
+          <strong>Customize your template:</strong> LaneIQ popup → Settings → Load Inquiry Email Template
+        </div>
+
+        <div class="cta">
+          <button class="btn" data-go="4">
+            Next
+            <span class="arrow">→</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Screen 4 — Google Maps API Key ─────────────────────────── -->
+    <section class="screen" id="screen4">
+      <button class="back-link" data-go="3">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">L</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">Enable Deadhead Miles &amp; <span class="accent">RPM</span></h2>
+        <p class="sub">LaneIQ uses Google Maps to calculate deadhead miles from your location to the load origin, and automatically computes your RPM. This requires a free Google Maps API key.</p>
+
+        <div class="rpm-mockup" role="img" aria-label="RPM calculator preview">
+          <div class="rpm-map-side">
+            <svg class="rpm-map-svg" viewBox="0 0 400 220" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <!-- Simplified US outline -->
+              <path d="M 40 50
+                       L 340 45
+                       L 365 60
+                       L 372 90
+                       L 370 122
+                       L 355 145
+                       L 362 172
+                       L 348 178
+                       L 320 172
+                       L 280 170
+                       L 240 172
+                       L 215 188
+                       L 190 178
+                       L 150 172
+                       L 110 168
+                       L 75 162
+                       L 55 145
+                       L 42 120
+                       L 38 85
+                       L 40 50 Z"
+                    fill="#f5f5f7"
+                    stroke="#d4d4d8"
+                    stroke-width="1.5"
+                    stroke-linejoin="round"/>
+              <!-- Route line: California → Maryland -->
+              <path d="M 75 108 Q 200 60 325 90"
+                    fill="none"
+                    stroke="#0058e0"
+                    stroke-width="2.5"
+                    stroke-dasharray="6 4"
+                    stroke-linecap="round"/>
+              <!-- Point A — Sacramento, CA -->
+              <circle cx="75" cy="108" r="11" fill="#0058e0"/>
+              <text x="75" y="113" text-anchor="middle"
+                    font-family="-apple-system, sans-serif"
+                    font-size="11" font-weight="700" fill="#fff">A</text>
+              <!-- Point B — Maryland -->
+              <circle cx="325" cy="90" r="11" fill="#0058e0"/>
+              <text x="325" y="95" text-anchor="middle"
+                    font-family="-apple-system, sans-serif"
+                    font-size="11" font-weight="700" fill="#fff">B</text>
+            </svg>
+            <div class="rpm-map-stats">
+              Loaded 2,689 mi · 1 day 15 hrs<br>
+              DH 35 mi · 40 mins
+            </div>
+          </div>
+          <div class="rpm-calc">
+            <div class="rpm-calc-label">RPM Calculator</div>
+            <div class="rpm-row"><span class="k">Rate</span><span class="v">$10,500</span></div>
+            <div class="rpm-row"><span class="k">Miles</span><span class="v">2,689</span></div>
+            <div class="rpm-row"><span class="k">RPM</span><span class="v hi-orange">$3.90/mi</span></div>
+            <div class="rpm-row"><span class="k">DH From</span><span class="v">Sacramento, CA</span></div>
+            <div class="rpm-row"><span class="k">DH Miles</span><span class="v">35 mi</span></div>
+            <div class="rpm-row"><span class="k">Fuel Cost</span><span class="v">$1,630</span></div>
+            <div class="rpm-row"><span class="k">Profit</span><span class="v hi-green">$8,870</span></div>
+          </div>
+        </div>
+
+        <div class="rpm-caption">
+          LaneIQ calculates all of this automatically — the moment you click a load row.
+        </div>
+
+        <div class="setup-card">
+          <div class="setup-step">
+            <span class="setup-num">1</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Go to
+                <a class="link" href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a>
+                and sign in with your Google account
+              </div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <span class="setup-num">2</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Create a new project (or select an existing one)
+              </div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <span class="setup-num">3</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Enable the <span class="chip">Maps JavaScript API</span> and <span class="chip">Distance Matrix API</span>
+              </div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <span class="setup-num">4</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Go to <span class="chip">Credentials</span> → <span class="chip">Create API Key</span> → copy it
+              </div>
+            </div>
+          </div>
+          <div class="setup-step">
+            <span class="setup-num">5</span>
+            <div class="setup-body">
+              <div class="setup-title">
+                Paste the key into the LaneIQ popup under <span class="chip">Settings → Google Maps API Key</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="warm-note">
+          <strong>Free for normal use.</strong> Google Maps API has a generous monthly free tier — you won't be charged for typical dispatcher usage.
+        </div>
+
+        <div class="cta">
+          <button class="btn" data-go="5">
+            Next
+            <span class="arrow">→</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Screen 5 — Pick a plan ─────────────────────────────────── -->
+    <section class="screen" id="screen5">
+      <button class="back-link" data-go="4">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">L</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">Start Your Free <span class="accent">14-Day Trial</span></h2>
+        <p class="sub">Pick the plan that fits how you book. Cancel anytime, no card charge during trial.</p>
+
+        <div class="plans">
+          <!-- Solo -->
+          <div class="plan">
+            <div class="plan-name">Solo</div>
+            <div class="plan-price">
+              <span class="amt">$19</span>
+              <span class="per">/mo</span>
+            </div>
+            <div class="plan-tag-line">Your CSV data on DAT</div>
+            <ul class="plan-feats">
+              <li>Upload your own rate history (CSV)</li>
+              <li>Lane match highlighting on DAT</li>
+              <li>Past-rate panel for every load</li>
+              <li>Google Maps deadhead miles</li>
+            </ul>
+            <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gM14mazng8ydXabdv5EY02" target="_blank" rel="noopener">
+              Start Solo Trial
+            </a>
+            <div class="trial-line">14-day free trial · Cancel anytime</div>
+          </div>
+
+          <!-- Pro (recommended) -->
+          <div class="plan recommended">
+            <div class="plan-tag">Recommended</div>
+            <div class="plan-name">Pro</div>
+            <div class="plan-price">
+              <span class="amt">$39</span>
+              <span class="per">/mo</span>
+            </div>
+            <div class="plan-tag-line">Your CSV + 6,700+ Verified Market Rates</div>
+            <ul class="plan-feats">
+              <li>Everything in Solo</li>
+              <li>6,700+ verified freight rates — Northwest to Southeast and back</li>
+              <li>Shipper &amp; receiver details on market loads</li>
+              <li>Weight, pallets, and equipment data included</li>
+              <li>Strongest match accuracy — even without your own CSV</li>
+            </ul>
+            <div class="plan-note">
+              Perfect if you're new to a lane or want to cross-check your rates against the market.
+            </div>
+            <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gMaEW22RcWm9GU1CV5EY01" target="_blank" rel="noopener">
+              Start Pro Trial
+            </a>
+            <div class="trial-line">14-day free trial · Cancel anytime</div>
+          </div>
+        </div>
+
+        <button class="skip-link" data-go="6">Skip for now →</button>
+      </div>
+    </section>
+
+    <!-- ─── Screen 6 — Pin it ──────────────────────────────────────── -->
+    <section class="screen" id="screen6">
+      <button class="back-link" data-go="5">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">L</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">One Last <span class="accent">Step</span></h2>
+        <p class="sub">Pin LaneIQ to your Chrome toolbar so it's one click away on every DAT page.</p>
+
+        <div class="pin-card">
+          <ol class="pin-steps">
+            <li class="pin-step">
+              <span class="pin-num">1</span>
+              <div>
+                <div class="pin-title">Click the puzzle piece icon in the top-right of Chrome</div>
+                <div class="pin-detail">It's next to your profile picture, near the address bar.</div>
+              </div>
+            </li>
+            <li class="pin-step">
+              <span class="pin-num">2</span>
+              <div>
+                <div class="pin-title">Find <span class="chip">LaneIQ</span> in the dropdown</div>
+                <div class="pin-detail">All your installed extensions show up here.</div>
+              </div>
+            </li>
+            <li class="pin-step">
+              <span class="pin-num">3</span>
+              <div>
+                <div class="pin-title">Click the pin icon next to it</div>
+                <div class="pin-detail">The pin turns orange when LaneIQ is pinned — that's it!</div>
+              </div>
+            </li>
+          </ol>
+
+          <div class="visual">
+            <div class="browser-frame">
+              <div class="browser-bar">
+                <span class="dot r"></span>
+                <span class="dot y"></span>
+                <span class="dot g"></span>
+                <span class="browser-spacer"></span>
+                <div class="browser-icons">
+                  <span class="puzzle-highlight" aria-hidden="true">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.98.98 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/>
+                    </svg>
+                  </span>
+                  <span style="width:22px; height:22px; border-radius:50%; background:linear-gradient(135deg,#7c4dff,#536dfe);"></span>
+                </div>
+              </div>
+              <div class="browser-body">
+                <div class="ext-row">
+                  <span class="ext-mini">L</span>
+                  <span class="ext-name">LaneIQ</span>
+                  <span class="pin-btn">
+                    <span>📌</span> Pin
+                  </span>
+                </div>
+                <div class="ext-row" style="opacity:.45;background:#fafafa;border-color:var(--line);">
+                  <span class="ext-mini" style="background:#bbb;">A</span>
+                  <span class="ext-name" style="color:var(--ink-soft);">Another extension</span>
+                  <span style="font-size:12.5px;color:var(--ink-soft);">Pin</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="cta">
+          <button class="btn" id="go-btn">
+            Let's Go!
+            <span class="arrow">→</span>
+          </button>
+          <div class="footer-note">Opens the DAT load board in a new tab</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- Page indicator dots -->
+  <div class="dots" aria-hidden="true">
+    <span class="pdot active" data-dot="1"></span>
+    <span class="pdot"        data-dot="2"></span>
+    <span class="pdot"        data-dot="3"></span>
+    <span class="pdot"        data-dot="4"></span>
+    <span class="pdot"        data-dot="5"></span>
+    <span class="pdot"        data-dot="6"></span>
+  </div>
+
+  <script src="welcome.js"></script>
+</body>
+</html>
