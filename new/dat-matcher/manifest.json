@@ -1,14 +1,19 @@
 {
   "manifest_version": 3,
   "name": "LaneIQ \u2014 DAT Load Matcher",
-  "version": "1.10",
+  "version": "1.16",
   "description": "Highlights DAT loads that match your freight history. Color-coded by tier: same lane + broker, same lane, or same origin.",
   "permissions": [
     "storage",
     "tabs",
     "windows",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "identity"
   ],
+  "oauth2": {
+    "client_id": "37040200160-4eceklacq36gac24eudi5ei3rs13160n.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/gmail.send"]
+  },
   "background": {
     "service_worker": "background.js"
   },

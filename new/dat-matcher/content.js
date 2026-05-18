@@ -18,6 +18,12 @@
   let isResizing = false, resizeRightEdge = 0, resizeCorner = false;
   let _dlmT;
   let _batchTimer = null;
+  let _zeroRowStreak = 0;
+  let _cityFailCount  = 0;
+  let _activeTab    = 'history';
+  let lovedLoads    = {};   // loadKey → { record, savedAt }
+  let _recPool      = {};   // loadKey → record, populated by renderRecs for heart click lookup
+  let _regionsTimer = null;
   const _dbMatchCache = {};
   let _lastClickedRow = null;
   let _lastExpandKey = '';
@@ -200,6 +206,10 @@ if (so && ro && so !== ro) return false;
 
   function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
+  function loveKey(r) {
+    return String(r.loadNum || '').trim() || [r.origin || '', r.destination || '', r.puDate || ''].join('|');
+  }
+
   function cleanStreet(s) {
     if (!s) return '';
     // Strip everything from the last comma onward (removes suite/dock/city fragments)
@@ -262,7 +272,14 @@ if (so && ro && so !== ro) return false;
   }
 
   // ── Send email via Gmail compose URL ──────────────────────────────────────
-  function sendEmail(brokerEmail, originRaw, destRaw) {
+  async function sendEmail(brokerEmail, originRaw, destRaw, dateRaw = '') {
+    // Belt-and-suspenders: refresh name/company from storage if in-memory is empty.
+    // Handles the edge case where the popup saved them just before this click.
+    if (!userName || !userCompany) {
+      const stored = await chrome.storage.local.get(['userName', 'userCompany']);
+      if (!userName    && stored.userName)    userName    = stored.userName;
+      if (!userCompany && stored.userCompany) userCompany = stored.userCompany;
+    }
     const origin  = cleanCity(originRaw);
     const dest    = cleanCity(destRaw);
     const subject = emailSubject
@@ -272,14 +289,41 @@ if (so && ro && so !== ro) return false;
       .replace(/\{origin\}/g, origin)
       .replace(/\{destination\}/g, dest)
       .replace(/\{name\}/g, userName)
-      .replace(/\{company\}/g, userCompany);
+      .replace(/\{company\}/g, userCompany)
+      .replace(/\{date\}/g, dateRaw);
+
+    async function sendEmailViaGmail(to, subj, bdy) {
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'sendGmail', to, subject: subj, body: bdy,
+        });
+        if (result?.ok) return true;
+      } catch (e) {
+        // runtime error (e.g. background not ready) — fall through
+      }
+      return false;
+    }
 
     const acct = senderGmailIndex;
     const url  = `https://mail.google.com/mail/u/${acct}/?view=cm&fs=1` +
                  `&to=${encodeURIComponent(brokerEmail)}` +
                  `&su=${encodeURIComponent(subject)}` +
                  `&body=${encodeURIComponent(body)}`;
-    window.open(url, '_blank');
+    const sent = await sendEmailViaGmail(brokerEmail, subject, body);
+    if (!sent) window.open(url, '_blank');
+  }
+
+  // ── Selector error reporting ────────────────────────────────────────────────
+  async function reportSelectorError(type, detail) {
+    try {
+      await fetch('https://laneiq-backend-production.up.railway.app/selector-error', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, detail, timestamp: new Date().toISOString() })
+      });
+    } catch (e) {
+      // silent — never break the extension trying to report
+    }
   }
 
     // ── Extract broker email from DAT row ──────────────────────────────────────
@@ -370,10 +414,12 @@ if (so && ro && so !== ro) return false;
       .filter(c => c.length > 4 && !['Full', 'Partial', 'Reefer', 'Flat', 'Step'].some(w => c.startsWith(w)));
     const chipOrigin = row.dataset.dlmOrigin || cityMatches[0] || origin;
     const chipDest   = row.dataset.dlmDest   || cityMatches[1] || dest;
+    const dateMatch  = rowText.match(/\b(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/);
+    const chipDate   = dateMatch ? dateMatch[1] : '';
 
     const onClick = e => {
       e.stopPropagation(); e.preventDefault();
-      sendEmail(email, e.currentTarget.dataset.emailOrigin || '', e.currentTarget.dataset.emailDest || '');
+      sendEmail(email, e.currentTarget.dataset.emailOrigin || '', e.currentTarget.dataset.emailDest || '', e.currentTarget.dataset.emailDate || '');
       flashChipSent(e.currentTarget);
     };
 
@@ -385,6 +431,7 @@ if (so && ro && so !== ro) return false;
         a.dataset.dlmChip = '1';
         a.dataset.emailOrigin = chipOrigin;
         a.dataset.emailDest   = chipDest;
+        a.dataset.emailDate   = chipDate;
         a.classList.add('dlm-email-chip');
         a.title = `Click to email ${email}`;
         a.addEventListener('click', onClick, true);
@@ -407,6 +454,7 @@ if (so && ro && so !== ro) return false;
         parent.dataset.dlmChip = '1';
         parent.dataset.emailOrigin = chipOrigin;
         parent.dataset.emailDest   = chipDest;
+        parent.dataset.emailDate   = chipDate;
         parent.classList.add('dlm-email-chip');
         parent.title = `Click to email ${email}`;
         parent.addEventListener('click', onClick, true);
@@ -421,6 +469,7 @@ if (so && ro && so !== ro) return false;
       chip.dataset.dlmChip = '1';
       chip.dataset.emailOrigin = chipOrigin;
       chip.dataset.emailDest   = chipDest;
+      chip.dataset.emailDate   = chipDate;
       chip.textContent = email;
       chip.title = `Click to email ${email}`;
       chip.addEventListener('click', onClick, true);
@@ -446,7 +495,8 @@ if (so && ro && so !== ro) return false;
     origin = origin.replace(/^\d+\s*/, '').trim();
     dest   = dest.replace(/^\d+\s*/, '').trim();
 
-    if (origin.length > 3 && dest.length > 3) return { origin, dest };
+    const LABEL_SKIP = /^(my account|origin|destination|filter|search)/i;
+    if (origin.length > 3 && dest.length > 3 && !LABEL_SKIP.test(dest) && !LABEL_SKIP.test(origin)) return { origin, dest };
 
     // Fallback: regex scan on row text
     const text = row.textContent;
@@ -459,6 +509,9 @@ if (so && ro && so !== ro) return false;
       if (c.length >= 2 && !['Van','Full','Partial','Reefer','Flat','Step'].includes(c)) {
         cities.push(`${c}, ${m[2]}`);
       }
+    }
+    if (!cities[0] && !cities[1] && !origin && !dest) {
+      _cityFailCount++;
     }
     return { origin: cities[0] || origin, dest: cities[1] || dest };
   }
@@ -698,6 +751,114 @@ if (so && ro && so !== ro) return false;
   }
 
   // ── Panel ───────────────────────────────────────────────────────────────────
+  function showLovedSearchResults(q) {
+    const bodyEl = document.getElementById('dlm-body');
+    if (!bodyEl) return;
+    const lq = q.toLowerCase();
+    const filtered = Object.values(lovedLoads)
+      .map(e => e.record)
+      .filter(r =>
+        (r.origin      || '').toLowerCase().includes(lq) ||
+        (r.destination || '').toLowerCase().includes(lq) ||
+        (r.broker      || '').toLowerCase().includes(lq) ||
+        String(r.loadNum || '').toLowerCase().includes(lq)
+      );
+    if (!filtered.length) {
+      bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No preferred loads match<br><strong style="color:#6e6e73;font-weight:600">${esc(q)}</strong></div>`;
+      return;
+    }
+    bodyEl.innerHTML =
+      '<div class="dlm-stitle">Matching Preferred · ' + filtered.length + '</div>' +
+      renderRecs(filtered, '#e05c5c', 999, true, true, new Set(Object.keys(lovedLoads)));
+  }
+
+  function countOrigins() {
+    const counts = {};
+    document.querySelectorAll('[data-dlm-origin]').forEach(el => {
+      const city = el.dataset.dlmOrigin;
+      if (city) counts[city] = (counts[city] || 0) + 1;
+    });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  }
+
+  function renderRegionsBody(bodyEl) {
+    const top = countOrigins();
+    const maxCount = top.length ? top[0][1] : 1;
+    const rows = top.length
+      ? top.map(([city, count]) => {
+          const pct = Math.round((count / maxCount) * 100);
+          return `
+            <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid rgba(0,0,0,.04)">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;font-weight:600;color:#1d1d1f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(city)}</div>
+                <div style="margin-top:3px;height:3px;border-radius:2px;background:#e5e5ea;overflow:hidden">
+                  <div style="height:100%;width:${pct}%;background:#0058e0;border-radius:2px;transition:width .3s"></div>
+                </div>
+              </div>
+              <div style="font-size:12px;font-weight:700;color:#0058e0;flex-shrink:0;min-width:20px;text-align:right">${count}</div>
+            </div>`;
+        }).join('')
+      : '<div style="text-align:center;padding:20px 0;color:#aeaeb2;font-size:12px">No highlighted loads on screen yet</div>';
+
+    bodyEl.innerHTML = `
+      <a href="https://iq.dat.com/market-conditions/conditions/REEFER~KMA~PREV_BUSINESS_DAY~OUT~~~0"
+         target="_blank"
+         style="display:flex;align-items:center;justify-content:center;gap:6px;margin:12px;padding:10px 14px;background:#0058e0;color:#fff;border-radius:10px;font-size:12px;font-weight:700;text-decoration:none;letter-spacing:.01em;box-shadow:0 2px 8px rgba(0,88,224,.28);transition:background .15s"
+         onmouseover="this.style.background='#004ccc'"
+         onmouseout="this.style.background='#0058e0'">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="flex-shrink:0">
+          <path d="M2 12L6 8l3 3 5-6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        View DAT Market Conditions
+      </a>
+      <div style="padding:0 12px">
+        <div class="dlm-stitle" style="margin-bottom:6px">Top Origins on Screen${top.length ? ' · ' + top.length : ''}</div>
+        ${rows}
+      </div>`;
+  }
+
+  function switchTab(name) {
+    _activeTab = name;
+    if (name !== 'regions') { clearInterval(_regionsTimer); _regionsTimer = null; }
+    document.querySelectorAll('#dlm-panel .dlm-tab').forEach(t =>
+      t.classList.toggle('dlm-tab-active', t.dataset.tab === name)
+    );
+    const searchWrap = document.getElementById('dlm-search-wrap');
+    const bodyEl     = document.getElementById('dlm-body');
+    if (!bodyEl) return;
+
+    if (name === 'history') {
+      if (searchWrap) searchWrap.style.display = '';
+      const searchEl = document.getElementById('dlm-search');
+      if (searchEl) searchEl.placeholder = 'Search origin, destination, broker, load #…';
+      bodyEl.innerHTML = panelBodyHTML ||
+        '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Click a highlighted row<br>to see booking history</div>';
+      bodyEl.scrollTop = 0;
+    } else if (name === 'loved') {
+      if (searchWrap) searchWrap.style.display = '';
+      const searchEl = document.getElementById('dlm-search');
+      const clearEl  = document.getElementById('dlm-search-clear');
+      if (searchEl) { searchEl.value = ''; searchEl.placeholder = 'Search preferred loads…'; }
+      if (clearEl)  clearEl.style.display = 'none';
+      const recs = Object.values(lovedLoads)
+        .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
+        .map(e => e.record);
+      bodyEl.innerHTML = recs.length
+        ? '<div style="padding:10px 14px 6px;font-size:12px;font-weight:600;color:#3a3a3c;line-height:1.5">Follow up with your brokers — let them know you\'re available for these lanes again.</div>' +
+          '<div class="dlm-stitle">Preferred Loads · ' + recs.length + '</div>' +
+          renderRecs(recs, '#e05c5c', 999, true, true, new Set(Object.keys(lovedLoads)))
+        : '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Tap ♡ on any load<br>to mark it as preferred</div>';
+      bodyEl.scrollTop = 0;
+    } else if (name === 'regions') {
+      if (searchWrap) searchWrap.style.display = 'none';
+      renderRegionsBody(bodyEl);
+      _regionsTimer = setInterval(() => {
+        const el = document.getElementById('dlm-body');
+        if (el && _activeTab === 'regions') renderRegionsBody(el);
+      }, 1000);
+    }
+  }
+
   function buildPanel() {
     const d = document.createElement('div');
     d.id = 'dlm-panel';
@@ -710,6 +871,11 @@ if (so && ro && so !== ro) return false;
           <button id="dlm-minimize" title="Minimize">─</button>
           <button id="dlm-close" title="Close">✕</button>
         </div>
+      </div>
+      <div id="dlm-tabs">
+        <button class="dlm-tab dlm-tab-active" data-tab="history">Load History</button>
+        <button class="dlm-tab" data-tab="loved">♥ Preferred</button>
+        <button class="dlm-tab" data-tab="regions">Hot Regions</button>
       </div>
       <div id="dlm-search-wrap">
         <span style="color:#4b5563;font-size:13px;flex-shrink:0;line-height:1">⌕</span>
@@ -762,13 +928,21 @@ if (so && ro && so !== ro) return false;
       clearTimeout(searchTimer);
       const q = searchInput.value.trim();
       searchClear.style.display = q ? 'block' : 'none';
-      if (!q) { document.getElementById('dlm-body').innerHTML = panelBodyHTML; return; }
-      searchTimer = setTimeout(() => showSearchResults(q), 150);
+      if (!q) {
+        if (_activeTab === 'loved') switchTab('loved');
+        else document.getElementById('dlm-body').innerHTML = panelBodyHTML;
+        return;
+      }
+      searchTimer = setTimeout(() => {
+        if (_activeTab === 'loved') showLovedSearchResults(q);
+        else showSearchResults(q);
+      }, 150);
     });
     searchClear.addEventListener('click', () => {
       searchInput.value = '';
       searchClear.style.display = 'none';
-      document.getElementById('dlm-body').innerHTML = panelBodyHTML;
+      if (_activeTab === 'loved') switchTab('loved');
+      else document.getElementById('dlm-body').innerHTML = panelBodyHTML;
       searchInput.focus();
     });
 
@@ -820,6 +994,32 @@ if (so && ro && so !== ro) return false;
       if (isResizing) { isResizing = false; resizeCorner = false; d.classList.remove('dlm-resizing'); }
     });
 
+    // Tab clicks
+    d.querySelectorAll('.dlm-tab').forEach(btn =>
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab))
+    );
+
+    // Heart (Loved) delegation — survives innerHTML replacements on #dlm-body
+    d.querySelector('#dlm-body').addEventListener('click', e => {
+      const btn = e.target.closest('.dlm-heart-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      const key = btn.dataset.loadKey;
+      if (!key) return;
+      if (lovedLoads[key]) {
+        delete lovedLoads[key];
+        btn.classList.remove('dlm-loved');
+        btn.title = 'Save to Preferred';
+      } else {
+        const rec = _recPool[key];
+        if (rec) lovedLoads[key] = { record: rec, savedAt: Date.now() };
+        btn.classList.add('dlm-loved');
+        btn.title = 'Remove from Preferred';
+      }
+      chrome.storage.local.set({ lovedLoads });
+      if (_activeTab === 'loved') switchTab('loved');
+    });
+
     return d;
   }
 
@@ -841,6 +1041,7 @@ if (so && ro && so !== ro) return false;
 
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
+    switchTab('history');
 
     const titleEl = panel.querySelector('#dlm-title');
     if (titleEl) {
@@ -864,12 +1065,13 @@ if (so && ro && so !== ro) return false;
         </div>
       </div>`;
 
+    const lk = new Set(Object.keys(lovedLoads));
     if (odM.length) {
       // skipAnim=true: all records use animation-delay:0 so none are hidden during a
       // stagger delay. The .dlm-rec CSS animation still runs (opacity 0→1) but fires
       // immediately for every record, so the panel is never empty on first open.
       html += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-              renderRecs(odM, '#34c759', 20, true, true);
+              renderRecs(odM, '#34c759', 20, true, true, lk);
     }
 
     // Purple: same lane + same broker
@@ -880,10 +1082,10 @@ if (so && ro && so !== ro) return false;
 
     // Blue: same origin city only
     if (!odM.length && oM.length) {
-      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true);
+      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lk);
     } else if (odM.length && oM.length) {
       const originOnly = oM.filter(r => !odM.find(o => o.loadNum === r.loadNum));
-      if (originOnly.length) html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true);
+      if (originOnly.length) html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lk);
     }
 
     panelBodyHTML = html;
@@ -910,6 +1112,7 @@ if (so && ro && so !== ro) return false;
   async function showPanelDual(origin, dest, odM, oM, bM, datBroker, detailNode) {
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
+    switchTab('history');
 
     const bodyEl = document.getElementById('dlm-body');
 
@@ -937,15 +1140,16 @@ if (so && ro && so !== ro) return false;
         </div>
       </div>`;
 
+    const lkd = new Set(Object.keys(lovedLoads));
     if (odM.length) {
       csvHTML += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-                 renderRecs(odM, '#34c759', 20, true, true);
+                 renderRecs(odM, '#34c759', 20, true, true, lkd);
     }
     if (!odM.length && oM.length) {
-      csvHTML += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true);
+      csvHTML += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lkd);
     } else if (odM.length && oM.length) {
       const originOnly = oM.filter(r => !odM.find(x => x.loadNum === r.loadNum));
-      if (originOnly.length) csvHTML += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true);
+      if (originOnly.length) csvHTML += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lkd);
     }
 
     const dbLoadingHTML = `
@@ -1050,6 +1254,7 @@ if (so && ro && so !== ro) return false;
   async function showPanelFromAPI(origin, dest, detailNode) {
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
+    switchTab('history');
 
     const bodyEl = document.getElementById('dlm-body');
     bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px">Loading LaneIQ data…</div>`;
@@ -1198,7 +1403,7 @@ if (so && ro && so !== ro) return false;
     bodyEl.scrollTop = 0;
   }
 
-  function renderRecs(list, color, limit = 20, skipAnim = false, skipFilter = false) {
+  function renderRecs(list, color, limit = 20, skipAnim = false, skipFilter = false, lovedKeys = new Set()) {
     // skipFilter = true for exact lane matches — never hide a confirmed match
     // regardless of whether it has a rate/pickup/commodity filled in.
     const filtered = skipFilter ? list : list.filter(r => {
@@ -1209,16 +1414,21 @@ if (so && ro && so !== ro) return false;
              (r.commodity       && r.commodity       !== 'nan' && r.commodity.trim());
     });
     return filtered.slice(0, limit).map((r, i) => {
+      const key  = loveKey(r);
+      _recPool[key] = r;
+      const loved = lovedKeys.has(key);
+
       const rate = String(r.rate||'').trim();
       const rateNum = parseFloat(rate);
       const rd   = rate && rate !== 'nan' && !isNaN(rateNum)
                      ? '$' + rateNum.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
-                     : (rate && rate !== 'nan' ? rate : 'N/A'); // fall back to raw string if not a clean number
+                     : (rate && rate !== 'nan' ? rate : 'N/A');
       const ln   = String(r.loadNum||'').replace(/\n.*/,'').trim() || '—';
       const dt   = String(r.puDate||'').split('T')[0].substring(0, 10);
       const broker = String(r.broker||'').trim();
       const gUrl = (ln !== '—' && !(useDB && !useCSV)) ? gmailUrl(ln) : null;
       const gmailBtn = gUrl ? `<a href="${gUrl}" target="_blank" class="dlm-gmail-btn">📧 Gmail</a>` : '';
+      const heartBtn = `<button class="dlm-heart-btn${loved ? ' dlm-loved' : ''}" data-load-key="${esc(key)}" title="${loved ? 'Remove from Preferred' : 'Save to Preferred'}">♥</button>`;
 
       const pickupAddr   = parseCompanyAddress(r.pickupCompany   || '');
       const deliveryAddr = parseCompanyAddress(r.deliveryCompany || '');
@@ -1234,7 +1444,7 @@ if (so && ro && so !== ro) return false;
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
             </div>
-            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}<span class="dlm-dt">${esc(dt)}</span></div>
+            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
           <div class="dlm-grid">
             <div class="dlm-k">Rate</div><div class="dlm-v dlm-rate">${esc(rd)}</div>
@@ -1311,14 +1521,28 @@ if (so && ro && so !== ro) return false;
 
   // ── Scan ────────────────────────────────────────────────────────────────────
   function scan() {
+    _cityFailCount = 0;
     const usingAPI = licenseTier === 'pro' && useDB;
     if (!odIndex && !oIndex && !usingAPI) return;
     // processRow skips rows whose origin/dest hasn't changed, so no bulk
     // class-removal pass is needed — stale state is cleared per-row on demand.
-    document.querySelectorAll('[class*="row-container"], [class*="row-cells"]').forEach(r => {
+    const rows = document.querySelectorAll('[class*="row-container"], [class*="row-cells"]');
+    if (rows.length === 0 && location.href.includes('dat.com')) {
+      _zeroRowStreak++;
+      if (_zeroRowStreak >= 3) {
+        reportSelectorError('zero-rows', 'row-container and row-cells both returned 0 matches');
+        _zeroRowStreak = 0;
+      }
+    } else {
+      _zeroRowStreak = 0;
+    }
+    rows.forEach(r => {
       processRow(r);
       injectEmailChip(r);
     });
+    if (_cityFailCount > 5) {
+      reportSelectorError('city-extraction-failed', `${_cityFailCount} rows failed city extraction in one scan`);
+    }
     if (usingAPI) scheduleBatchHighlight();
   }
 
@@ -1381,7 +1605,7 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads']);
 
     // Resolve tier/dataSource early so we can use them in the guards below
     licenseTier = s.licenseTier || 'solo';
@@ -1412,9 +1636,7 @@ if (so && ro && so !== ro) return false;
     emailSubject     = s.emailSubject  || 'Load Inquiry – {origin} → {destination}';
     emailTemplate    = s.emailTemplate || `Hi,
 
-My name is {name} with {company}. I'm reaching out about your load from {origin} to {destination} posted on DAT today.
-
-Can you share the rate, pickup window, and any special requirements?
+This is {name} with {company}. Please tell me more about your load from {origin}, pickup on {date}, going to {destination}, posted on DAT today.
 
 Thanks,
 {name}
@@ -1426,6 +1648,7 @@ Thanks,
     dlmMpg         = +s.dlmMpg         || 6.5;
     dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
     dlmDriverRate  = +s.dlmDriverRate  || 0;
+    lovedLoads     = s.lovedLoads      || {};
     _initialized = true;
 
     function clearAllHighlights() {
@@ -1449,6 +1672,20 @@ Thanks,
         panelPopped = changes.panelPopped.newValue || false;
         if (!panelPopped && panel && panelBodyHTML) panel.style.display = 'flex';
       }
+      // Live-sync Maps key, calculator defaults, and email signature fields
+      // so popup edits take effect immediately in already-open DAT tabs.
+      if ('mapsApiKey' in changes) {
+        mapsApiKey = changes.mapsApiKey.newValue || '';
+      }
+      if ('dlmMpg' in changes)        dlmMpg        = +changes.dlmMpg.newValue        || 6.5;
+      if ('dlmFuelPrice' in changes)  dlmFuelPrice  = +changes.dlmFuelPrice.newValue  || 3.89;
+      if ('dlmDriverRate' in changes) dlmDriverRate = +changes.dlmDriverRate.newValue || 0;
+      if ('userName' in changes)    userName    = changes.userName.newValue    || '';
+      if ('userCompany' in changes) userCompany = changes.userCompany.newValue || '';
+      if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
+      if ('emailTemplate' in changes)    emailTemplate    = changes.emailTemplate.newValue    || emailTemplate;
+      if ('senderGmailIndex' in changes) senderGmailIndex = typeof changes.senderGmailIndex.newValue !== 'undefined' ? changes.senderGmailIndex.newValue : 0;
+      if ('lovedLoads' in changes) lovedLoads = changes.lovedLoads.newValue || {};
       if ('useCSV' in changes || 'useDB' in changes || 'laneCount' in changes) {
         clearAllHighlights();
         _initialized = false;
@@ -1676,9 +1913,15 @@ Thanks,
                     m0 7c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
          </svg>RPM / Maps`;
       rpmBtn.style.cssText = BTN_BASE;
-      rpmBtn.addEventListener('click', e => {
+      rpmBtn.addEventListener('click', async e => {
         e.stopPropagation();
         e.preventDefault();
+        // Belt-and-suspenders: refresh key from storage if in-memory is empty.
+        // Handles the edge case where the popup saved a key just before this click.
+        if (!mapsApiKey) {
+          const stored = await chrome.storage.local.get(['mapsApiKey']);
+          if (stored.mapsApiKey) mapsApiKey = stored.mapsApiKey;
+        }
         const { origin, dest } = getDetailCities(el);
         const rate = getDetailRate(el);
         showRouteModal(origin, dest, rate, () => {});
@@ -1878,7 +2121,8 @@ Thanks,
       const onClick = e => {
         e.stopPropagation(); e.preventDefault();
         const { origin: freshOrigin, dest: freshDest } = getDetailCities(e.currentTarget);
-        sendEmail(email, freshOrigin, freshDest || '');
+        const freshDate = getDetailDate(e.currentTarget);
+        sendEmail(email, freshOrigin, freshDest || '', freshDate);
         flashChipSent(e.currentTarget);
       };
 
@@ -2011,6 +2255,20 @@ Thanks,
       node = node.parentElement;
     }
     return 0;
+  }
+
+  function getDetailDate(fromEl) {
+    // Walk up to the stamped row and extract the first pickup date from its text.
+    // DAT renders dates inline (e.g. "01/15" or "01/15-01/17").
+    let node = fromEl;
+    while (node && node !== document.body) {
+      if (node.dataset.dlmOrigin) {
+        const m = (node.textContent || '').match(/\b(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/);
+        return m ? m[1] : '';
+      }
+      node = node.parentElement;
+    }
+    return '';
   }
 
   // ── Route modal ──────────────────────────────────────────────────────────────

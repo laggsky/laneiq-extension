@@ -543,9 +543,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const DEFAULT_SUBJECT  = 'Load Inquiry – {origin} → {destination}';
   const DEFAULT_TEMPLATE = `Hi,
 
-My name is {name} with {company}. I'm reaching out about your load from {origin} to {destination} posted on DAT today.
-
-Can you share the rate, pickup window, and any special requirements?
+This is {name} with {company}. Please tell me more about your load from {origin}, pickup on {date}, going to {destination}, posted on DAT today.
 
 Thanks,
 {name}

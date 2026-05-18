@@ -428,7 +428,105 @@
   /* ─── Screen 2 — Setup ────────────────────────────────────────────── */
   #screen2 .inner { max-width: 760px; }
 
-  /* CSV columns section (under Setup) */
+  /* Display heading + aliases table (matches website #data section) */
+  h2.title-display {
+    font-size: clamp(28px, 4.2vw, 44px);
+    line-height: 1.08;
+    font-weight: 700;
+    letter-spacing: -.025em;
+    margin: 0 0 12px;
+    background: linear-gradient(180deg, var(--ink) 55%, rgba(29,29,31,.45));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .sub-display {
+    font-size: 16px;
+    color: var(--ink-soft);
+    line-height: 1.55;
+    margin: 0 0 32px;
+    max-width: 620px;
+    font-weight: 400;
+  }
+  .col-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin-bottom: 24px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .05), 0 1px 3px rgba(0, 0, 0, .03);
+  }
+  .col-table { width: 100%; border-collapse: collapse; }
+  .col-table thead tr {
+    border-bottom: 1px solid var(--line);
+    background: #fafafa;
+  }
+  .col-table th {
+    padding: 10px 16px;
+    text-align: left;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--ink-soft);
+    white-space: nowrap;
+  }
+  .col-table td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+    background: #fff;
+    font-size: 13px;
+  }
+  .col-table tbody tr:last-child td { border-bottom: none; }
+  .col-table tbody tr:hover td { background: #fafafa; }
+  .col-name {
+    font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--ink);
+    font-weight: 600;
+  }
+  .col-note {
+    font-size: 12px;
+    color: var(--ink-soft);
+    font-style: italic;
+    margin-top: 3px;
+    display: inline-block;
+    font-family: inherit;
+  }
+  .badge-req {
+    display: inline-flex;
+    background: var(--orange-soft);
+    border: 1px solid #ffd4bf;
+    color: var(--orange-dark);
+    border-radius: 980px;
+    padding: 3px 11px;
+    font-size: 10.5px;
+    font-weight: 700;
+    white-space: nowrap;
+    letter-spacing: .02em;
+  }
+  .badge-opt {
+    display: inline-flex;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--ink-faint);
+    border-radius: 980px;
+    padding: 3px 11px;
+    font-size: 10.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    letter-spacing: .02em;
+  }
+  .col-aliases {
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+  }
+
+  /* CSV example table (matches website #setup section) */
   .csv-section { margin-top: 36px; }
   .csv-heading {
     font-size: 16px;
@@ -452,6 +550,8 @@
     -webkit-overflow-scrolling: touch;
     box-shadow: 0 4px 14px rgba(0, 0, 0, .05), 0 1px 3px rgba(0, 0, 0, .03);
     background: #fff;
+    scrollbar-width: thin;
+    scrollbar-color: var(--orange) #e5e7eb;
   }
   .csv-table-wrap::-webkit-scrollbar { height: 10px; }
   .csv-table-wrap::-webkit-scrollbar-track {
@@ -463,10 +563,6 @@
     border-radius: 5px;
   }
   .csv-table-wrap::-webkit-scrollbar-thumb:hover { background: var(--orange-dark); }
-  .csv-table-wrap {
-    scrollbar-width: thin;
-    scrollbar-color: var(--orange) #e5e7eb;
-  }
   .csv-table {
     border-collapse: collapse;
     font-size: 12.5px;
@@ -491,7 +587,6 @@
   }
   .csv-table td:last-child { border-right: none; }
   .csv-table tbody tr:nth-child(even) td { background: #fafafa; }
-
   .csv-note {
     margin-top: 16px;
     padding: 14px 16px;
@@ -504,39 +599,6 @@
   }
   .csv-note strong { color: var(--orange-dark); font-weight: 700; }
 
-  .tier-list {
-    list-style: none;
-    margin: 18px 0 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .tier-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 11px 14px;
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    font-size: 13.5px;
-    line-height: 1.4;
-  }
-  .tier-emoji { font-size: 16px; flex-shrink: 0; }
-  .tier-cols { font-weight: 600; color: var(--ink); }
-  .tier-arrow { color: var(--ink-faint); font-weight: 500; margin: 0 2px; }
-  .tier-desc { color: var(--ink-soft); }
-
-  .csv-warning {
-    margin-top: 14px;
-    text-align: center;
-    font-size: 12.5px;
-    color: var(--ink-soft);
-    font-style: italic;
-  }
-  .csv-warning strong { color: var(--ink); font-style: normal; font-weight: 700; }
-
   /* ─── Screen 3 — Email Template ───────────────────────────────────── */
   #screen3 .inner { max-width: 640px; }
 
@@ -544,11 +606,11 @@
   #screen4 .inner { max-width: 640px; }
 
   /* ─── Screen 5 — Pick a plan ──────────────────────────────────────── */
-  #screen5 .inner { max-width: 880px; }
+  #screen5 .inner { max-width: 1000px; }
   .plans {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 18px;
     margin-bottom: 14px;
   }
   .plan {
@@ -946,11 +1008,72 @@
           <span class="brand-name-sm">LaneIQ</span>
         </div>
 
-        <h2 class="title">Upload Your <span class="accent">Rate History</span></h2>
-        <p class="sub">LaneIQ matches loads against your past freight to highlight what each lane is really worth.</p>
+        <h2 class="title title-display">How to prepare your data.</h2>
+        <p class="sub sub-display">Export your load history as a CSV from any TMS or spreadsheet. LaneIQ recognizes common column name variations automatically.</p>
+
+        <div class="col-table-wrap">
+          <table class="col-table">
+            <thead>
+              <tr>
+                <th>Column</th>
+                <th>Required?</th>
+                <th>Accepted aliases</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <span class="col-name">Load #</span><br>
+                  <span class="col-note">Broker reference number — not your internal dispatch or invoice number.</span>
+                </td>
+                <td><span class="badge-req">Required</span></td>
+                <td><span class="col-aliases">Load #</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">date</span></td>
+                <td><span class="badge-req">Required</span></td>
+                <td><span class="col-aliases">ship_date, pickup_date, load_date</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">origin</span></td>
+                <td><span class="badge-req">Required</span></td>
+                <td><span class="col-aliases">origin_city, pickup, from, pickup_city</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">destination</span></td>
+                <td><span class="badge-req">Required</span></td>
+                <td><span class="col-aliases">dest, destination_city, delivery, to, drop</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">rate</span></td>
+                <td><span class="badge-req">Required</span></td>
+                <td><span class="col-aliases">total_rate, gross_pay, revenue, amount, pay</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">commodity</span></td>
+                <td><span class="badge-opt">Optional</span></td>
+                <td><span class="col-aliases">freight_type, cargo, product, load_type</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">weight</span></td>
+                <td><span class="badge-opt">Optional</span></td>
+                <td><span class="col-aliases">pallets, ft</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">Pickup Company + Full Address</span></td>
+                <td><span class="badge-opt">Optional</span></td>
+                <td><span class="col-aliases">Pickup Company + Full Address</span></td>
+              </tr>
+              <tr>
+                <td><span class="col-name">Delivery Company + Full Address</span></td>
+                <td><span class="badge-opt">Optional</span></td>
+                <td><span class="col-aliases">Delivery Company + Full Address</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
 
         <div class="csv-section">
-          <div class="csv-heading">Your CSV must use these exact column names:</div>
           <div class="csv-scroll-hint">← Scroll to see all columns →</div>
           <div class="csv-table-wrap">
             <table class="csv-table">
@@ -958,12 +1081,12 @@
                 <tr>
                   <th>Load #</th>
                   <th>Origin</th>
-                  <th>PU Date</th>
+                  <th>Date</th>
                   <th>Destination</th>
                   <th>Rate</th>
-                  <th>Weight / Pallets / FT</th>
-                  <th>Pickup Company + Full Address</th>
-                  <th>Delivery Company + Full Address</th>
+                  <th>Weight</th>
+                  <th>Pickup</th>
+                  <th>Delivery</th>
                   <th>Commodity</th>
                 </tr>
               </thead>
@@ -1001,54 +1124,13 @@
                   <td>ATL Distribution, 900 Peach St, Atlanta GA</td>
                   <td>Refrigerated</td>
                 </tr>
-                <tr>
-                  <td>12348</td>
-                  <td>Portland, OR</td>
-                  <td>03/05/2024</td>
-                  <td>Chicago, IL</td>
-                  <td>$4,100.00</td>
-                  <td>40,000 LB</td>
-                  <td>Pacific Goods, 222 River Rd, Portland OR</td>
-                  <td>Midwest Hub, 777 Lake Ave, Chicago IL</td>
-                  <td>General Freight</td>
-                </tr>
-                <tr>
-                  <td>12349</td>
-                  <td>Seattle, WA</td>
-                  <td>03/22/2024</td>
-                  <td>New York, NY</td>
-                  <td>$6,200.00</td>
-                  <td>45,000 LB</td>
-                  <td>Northwest Co, 444 Pine St, Seattle WA</td>
-                  <td>East Coast LLC, 111 Broadway, New York NY</td>
-                  <td>Electronics</td>
-                </tr>
               </tbody>
             </table>
           </div>
 
           <div class="csv-note">
             Don't worry if your CSV doesn't have all these columns — LaneIQ works with whatever you have.
-            <strong>Only Origin is required.</strong> The more columns you include, the smarter the matching gets.
-          </div>
-
-          <ul class="tier-list">
-            <li class="tier-row">
-              <span class="tier-emoji">🔵</span>
-              <span class="tier-cols">Origin only</span>
-              <span class="tier-arrow">→</span>
-              <span class="tier-desc">Blue highlights (basic origin matching)</span>
-            </li>
-            <li class="tier-row">
-              <span class="tier-emoji">🟢</span>
-              <span class="tier-cols">Origin + Destination</span>
-              <span class="tier-arrow">→</span>
-              <span class="tier-desc">Green / Yellow highlights (lane matching)</span>
-            </li>
-          </ul>
-
-          <div class="csv-warning">
-            <strong>Column names must match exactly</strong> — including spaces and capitalization.
+            <strong>Only Origin is required.</strong>
           </div>
         </div>
 
@@ -1129,13 +1211,13 @@
           </div>
           <div class="gmail-body">Hi,
 
-My name is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. I'm reaching out about your load from <span class="hl">Sacramento, CA</span> to <span class="hl">Chicago, IL</span> posted on DAT today.</div>
+This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Please tell me more about your load from <span class="hl">Sacramento, CA</span>, pickup on <span class="hl">01/15</span>, going to <span class="hl">Chicago, IL</span>, posted on DAT today.</div>
         </div>
 
         <div class="field-legend">
           <div class="row">
             <strong>🔄 Auto-filled:</strong>
-            <span class="vars">origin, destination</span>
+            <span class="vars">origin, destination, date</span>
           </div>
           <div class="row">
             <strong>✏️ Set once in popup:</strong>
@@ -1302,10 +1384,32 @@ My name is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. I'
           <span class="brand-name-sm">LaneIQ</span>
         </div>
 
-        <h2 class="title">Start Your Free <span class="accent">14-Day Trial</span></h2>
+        <h2 class="title">Start Your Free <span class="accent">30-Day Trial</span></h2>
         <p class="sub">Pick the plan that fits how you book. Cancel anytime, no card charge during trial.</p>
 
         <div class="plans">
+          <!-- Free Trial (primary CTA, recommended) -->
+          <div class="plan recommended">
+            <div class="plan-tag">Free Trial</div>
+            <div class="plan-name">Try it free</div>
+            <div class="plan-price">
+              <span class="amt">Free</span>
+            </div>
+            <div class="plan-tag-line">Full Pro access for 30 days</div>
+            <ul class="plan-feats">
+              <li>Full Pro access</li>
+              <li>Lane matching from your CSV</li>
+              <li>LaneIQ market database</li>
+              <li>RPM calculator</li>
+              <li>One-click broker email</li>
+              <li>No credit card required</li>
+            </ul>
+            <a class="plan-cta" data-stripe href="https://buy.stripe.com/cNi4gy7nb4pQ1ao1CV5EY03" target="_blank" rel="noopener">
+              Start Free Trial
+            </a>
+            <div class="trial-line">30 days free · No credit card required</div>
+          </div>
+
           <!-- Solo -->
           <div class="plan">
             <div class="plan-name">Solo</div>
@@ -1321,14 +1425,12 @@ My name is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. I'
               <li>Google Maps deadhead miles</li>
             </ul>
             <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gM14mazng8ydXabdv5EY02" target="_blank" rel="noopener">
-              Start Solo Trial
+              Get Solo
             </a>
-            <div class="trial-line">14-day free trial · Cancel anytime</div>
           </div>
 
-          <!-- Pro (recommended) -->
-          <div class="plan recommended">
-            <div class="plan-tag">Recommended</div>
+          <!-- Pro -->
+          <div class="plan">
             <div class="plan-name">Pro</div>
             <div class="plan-price">
               <span class="amt">$39</span>
@@ -1346,9 +1448,8 @@ My name is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. I'
               Perfect if you're new to a lane or want to cross-check your rates against the market.
             </div>
             <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gMaEW22RcWm9GU1CV5EY01" target="_blank" rel="noopener">
-              Start Pro Trial
+              Get Pro
             </a>
-            <div class="trial-line">14-day free trial · Cancel anytime</div>
           </div>
         </div>
 

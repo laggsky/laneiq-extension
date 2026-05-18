@@ -37,6 +37,17 @@
 
     /* Initial loading placeholder */
     .dlm-placeholder { text-align:center; padding:36px 20px; color:#aeaeb2; font-size:13px; line-height:1.6; }
+
+    /* Tabs */
+    #dlm-tabs { display:flex; flex-shrink:0; gap:3px; padding:5px 6px; background:#dcdce0; border-bottom:1px solid #c7c7cc; }
+    .dlm-tab { flex:1; padding:5px 0; font-size:11px; font-weight:500; color:#6e6e73; background:rgba(0,0,0,.06); border:none; border-radius:6px; cursor:pointer; letter-spacing:.01em; transition:background .12s,color .12s,box-shadow .12s; font-family:inherit; box-shadow:0 1px 2px rgba(0,0,0,.10); }
+    .dlm-tab.dlm-tab-active { background:#fff; color:#1c1c1e; box-shadow:0 2px 6px rgba(0,0,0,.18); }
+    .dlm-tab:hover:not(.dlm-tab-active) { background:rgba(255,255,255,.65); color:#3a3a3c; }
+
+    /* Heart button */
+    .dlm-heart-btn { background:none; border:none; cursor:pointer; font-size:20px; font-weight:700; color:#c7c7cc; padding:0; width:28px; line-height:1; display:inline-flex; align-items:center; justify-content:center; transition:color .15s; flex-shrink:0; }
+    .dlm-heart-btn:hover { opacity:.75; }
+    .dlm-heart-btn.dlm-loved { color:#e05c5c; }
   </style>
 </head>
 <body>
@@ -46,6 +57,12 @@
       <div class="dlm-hdr-btns">
         <button id="dlm-close" title="Close window">✕</button>
       </div>
+    </div>
+
+    <div id="dlm-tabs">
+      <button class="dlm-tab dlm-tab-active" data-tab="history">Load History</button>
+      <button class="dlm-tab" data-tab="loved">♥ Preferred</button>
+      <button class="dlm-tab" data-tab="regions">Hot Regions</button>
     </div>
 
     <div id="dlm-search-wrap">

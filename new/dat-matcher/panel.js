@@ -5,6 +5,9 @@
   let odIndex     = null, oIndex = null, brokerIndex = null;
   let panelBodyHTML = '';
   let pendingState  = null; // state queued while the window is minimized
+  let _activeTab  = 'history';
+  let lovedLoads  = {};   // loadKey → { record, savedAt }
+  let _recPool    = {};   // loadKey → record, for heart click lookup
 
   // ── Utilities (mirrored from content.js) ─────────────────────────────────
   function esc(s) {
@@ -104,6 +107,81 @@
     return { company: s.replace(/,+$/,'').trim(), street: '' };
   }
 
+  function showLovedSearchResults(q) {
+    const bodyEl = document.getElementById('dlm-body');
+    if (!bodyEl) return;
+    const lq = q.toLowerCase();
+    const filtered = Object.values(lovedLoads)
+      .map(e => e.record)
+      .filter(r =>
+        (r.origin      || '').toLowerCase().includes(lq) ||
+        (r.destination || '').toLowerCase().includes(lq) ||
+        (r.broker      || '').toLowerCase().includes(lq) ||
+        String(r.loadNum || '').toLowerCase().includes(lq)
+      );
+    if (!filtered.length) {
+      bodyEl.innerHTML = `<div class="dlm-placeholder">No preferred loads match<br><strong style="color:#6e6e73;font-weight:600">${esc(q)}</strong></div>`;
+      return;
+    }
+    bodyEl.innerHTML =
+      '<div class="dlm-stitle" style="margin:12px 4px 6px">Matching Preferred · ' + filtered.length + '</div>' +
+      renderRecs(filtered, '#e05c5c', 999, true, new Set(Object.keys(lovedLoads)));
+  }
+
+  function loveKey(r) {
+    return String(r.loadNum || '').trim() || [r.origin || '', r.destination || '', r.puDate || ''].join('|');
+  }
+
+  function switchTab(name) {
+    _activeTab = name;
+    document.querySelectorAll('.dlm-tab').forEach(t =>
+      t.classList.toggle('dlm-tab-active', t.dataset.tab === name)
+    );
+    const searchWrap = document.getElementById('dlm-search-wrap');
+    const bodyEl     = document.getElementById('dlm-body');
+    if (!bodyEl) return;
+
+    if (name === 'history') {
+      if (searchWrap) searchWrap.style.display = '';
+      const searchEl = document.getElementById('dlm-search');
+      if (searchEl) searchEl.placeholder = 'Search origin, destination, broker…';
+      bodyEl.innerHTML = panelBodyHTML ||
+        '<div class="dlm-placeholder">Click a highlighted row on DAT<br>to see booking history here</div>';
+      bodyEl.scrollTop = 0;
+    } else if (name === 'loved') {
+      if (searchWrap) searchWrap.style.display = '';
+      const searchEl = document.getElementById('dlm-search');
+      const clearEl  = document.getElementById('dlm-search-clear');
+      if (searchEl) { searchEl.value = ''; searchEl.placeholder = 'Search preferred loads…'; }
+      if (clearEl)  clearEl.style.display = 'none';
+      const recs = Object.values(lovedLoads)
+        .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0))
+        .map(e => e.record);
+      bodyEl.innerHTML = recs.length
+        ? '<div style="padding:10px 14px 6px;font-size:12px;font-weight:600;color:#3a3a3c;line-height:1.5">Follow up with your brokers — let them know you\'re available for these lanes again.</div>' +
+          '<div class="dlm-stitle" style="margin:6px 4px 6px">Preferred Loads · ' + recs.length + '</div>' +
+          renderRecs(recs, '#e05c5c', 999, true, new Set(Object.keys(lovedLoads)))
+        : '<div class="dlm-placeholder">Tap ♡ on any load<br>to mark it as preferred</div>';
+      bodyEl.scrollTop = 0;
+    } else if (name === 'regions') {
+      if (searchWrap) searchWrap.style.display = 'none';
+      bodyEl.innerHTML = `
+        <a href="https://iq.dat.com/market-conditions/conditions/REEFER~KMA~PREV_BUSINESS_DAY~OUT~~~0"
+           target="_blank"
+           style="display:flex;align-items:center;justify-content:center;gap:6px;margin:12px;padding:10px 14px;background:#0058e0;color:#fff;border-radius:10px;font-size:12px;font-weight:700;text-decoration:none;letter-spacing:.01em;box-shadow:0 2px 8px rgba(0,88,224,.28)"
+        >
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="flex-shrink:0">
+            <path d="M2 12L6 8l3 3 5-6" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          View DAT Market Conditions
+        </a>
+        <div class="dlm-placeholder" style="padding-top:12px;font-size:12px;color:#c7c7cc">
+          Live origin counts are available<br>in the inline panel on DAT
+        </div>`;
+      bodyEl.scrollTop = 0;
+    }
+  }
+
   function gmailUrl(loadNum) {
     const q = String(loadNum||'').replace(/[^a-zA-Z0-9]/g,'').trim();
     if (!q) return null;
@@ -116,7 +194,7 @@
       (addr.street ? `<br><span style="font-size:10px;color:#8e8e93;font-weight:400">${esc(addr.street)}</span>` : '');
   }
 
-  function renderRecs(list, color, limit = 20, skipFilter = false) {
+  function renderRecs(list, color, limit = 20, skipFilter = false, lovedKeys = new Set()) {
     const filtered = skipFilter ? list : list.filter(r => {
       const rate = String(r.rate||'').trim();
       return (rate && rate !== 'nan') ||
@@ -125,13 +203,18 @@
              (r.commodity       && r.commodity       !== 'nan' && r.commodity.trim());
     });
     return filtered.slice(0, limit).map((r, i) => {
+      const key  = loveKey(r);
+      _recPool[key] = r;
+      const loved = lovedKeys.has(key);
+
       const rate   = String(r.rate||'').trim();
       const rd     = rate.startsWith('$') ? rate : (rate ? '$'+rate : '');
       const ln     = String(r.loadNum||'').replace(/\n.*/,'').trim() || '—';
       const dt     = String(r.puDate||'').split('T')[0].substring(0, 10);
       const broker = String(r.broker||'').trim();
       const gUrl   = ln !== '—' ? gmailUrl(ln) : null;
-      const gmailBtn = gUrl ? `<a href="${gUrl}" target="_blank" class="dlm-gmail-btn">📧 Gmail</a>` : '';
+      const gmailBtn  = gUrl ? `<a href="${gUrl}" target="_blank" class="dlm-gmail-btn">📧 Gmail</a>` : '';
+      const heartBtn  = `<button class="dlm-heart-btn${loved ? ' dlm-loved' : ''}" data-load-key="${esc(key)}" title="${loved ? 'Remove from Preferred' : 'Save to Preferred'}">♥</button>`;
       const pickupAddr   = parseCompanyAddress(r.pickupCompany   || '');
       const deliveryAddr = parseCompanyAddress(r.deliveryCompany || '');
       const commodity    = String(r.commodity || '').trim();
@@ -142,7 +225,7 @@
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
             </div>
-            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}<span class="dlm-dt">${esc(dt)}</span></div>
+            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
           <div class="dlm-grid">
             <div class="dlm-k">Rate</div><div class="dlm-v dlm-rate">${esc(rd)}</div>
@@ -160,6 +243,14 @@
   // ── Render panel content from saved state ─────────────────────────────────
   function showContent(state, flash = false) {
     if (!state) return;
+    // Activate history tab visually without replacing body (showContent handles that)
+    _activeTab = 'history';
+    document.querySelectorAll('.dlm-tab').forEach(t =>
+      t.classList.toggle('dlm-tab-active', t.dataset.tab === 'history')
+    );
+    const searchWrap = document.getElementById('dlm-search-wrap');
+    if (searchWrap) searchWrap.style.display = '';
+
     if (state.mode === 'api') {
       const titleEl = document.getElementById('dlm-title');
       const bodyEl  = document.getElementById('dlm-body');
@@ -195,18 +286,18 @@
         </div>
       </div>`;
 
+    const lk = new Set(Object.keys(lovedLoads));
     if (odM.length) {
-      console.log('[LaneIQ pop-out] exact matches (odM):', JSON.parse(JSON.stringify(odM)));
       html += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-              renderRecs(odM, '#34c759', 20, true /* skipFilter */);
+              renderRecs(odM, '#34c759', 20, true /* skipFilter */, lk);
     }
 
     if (!odM.length && oM.length) {
-      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff');
+      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 20, false, lk);
     } else if (odM.length && oM.length) {
       const originOnly = oM.filter(r => !odM.find(o => o.loadNum === r.loadNum));
       if (originOnly.length)
-        html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff');
+        html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 20, false, lk);
     }
 
     panelBodyHTML = html;
@@ -284,25 +375,34 @@
     clearTimeout(searchTimer);
     const q = searchInput.value.trim();
     searchClear.style.display = q ? 'block' : 'none';
-    if (!q) { document.getElementById('dlm-body').innerHTML = panelBodyHTML; return; }
-    searchTimer = setTimeout(() => showSearchResults(q), 150);
+    if (!q) {
+      if (_activeTab === 'loved') switchTab('loved');
+      else document.getElementById('dlm-body').innerHTML = panelBodyHTML;
+      return;
+    }
+    searchTimer = setTimeout(() => {
+      if (_activeTab === 'loved') showLovedSearchResults(q);
+      else showSearchResults(q);
+    }, 150);
   });
   searchClear.addEventListener('click', () => {
     searchInput.value = '';
     searchClear.style.display = 'none';
-    document.getElementById('dlm-body').innerHTML = panelBodyHTML;
+    if (_activeTab === 'loved') switchTab('loved');
+    else document.getElementById('dlm-body').innerHTML = panelBodyHTML;
     searchInput.focus();
   });
 
   // ── Init ──────────────────────────────────────────────────────────────────
   async function init() {
     const s = await chrome.storage.local.get([
-      'panelState','gmailIndex','odIndex','oIndex','brokerIndex'
+      'panelState','gmailIndex','odIndex','oIndex','brokerIndex','lovedLoads'
     ]);
     gmailIndex  = s.gmailIndex  || 0;
     odIndex     = s.odIndex     || {};
     oIndex      = s.oIndex      || {};
     brokerIndex = s.brokerIndex || {};
+    lovedLoads  = s.lovedLoads  || {};
 
     if (s.panelState) {
       showContent(s.panelState);
@@ -313,10 +413,37 @@
         </div>`;
     }
 
+    // Tab clicks
+    document.querySelectorAll('.dlm-tab').forEach(btn =>
+      btn.addEventListener('click', () => switchTab(btn.dataset.tab))
+    );
+
+    // Heart (Loved) delegation on body
+    document.getElementById('dlm-body').addEventListener('click', e => {
+      const btn = e.target.closest('.dlm-heart-btn');
+      if (!btn) return;
+      e.stopPropagation();
+      const key = btn.dataset.loadKey;
+      if (!key) return;
+      if (lovedLoads[key]) {
+        delete lovedLoads[key];
+        btn.classList.remove('dlm-loved');
+        btn.title = 'Save to Preferred';
+      } else {
+        const rec = _recPool[key];
+        if (rec) lovedLoads[key] = { record: rec, savedAt: Date.now() };
+        btn.classList.add('dlm-loved');
+        btn.title = 'Remove from Preferred';
+      }
+      chrome.storage.local.set({ lovedLoads });
+      if (_activeTab === 'loved') switchTab('loved');
+    });
+
     // Live-update: whenever the user clicks a new DAT row, refresh this window.
     // Check the real window state via the Chrome API — document.hidden is not
     // reliable for minimized popup windows. If minimized, queue silently.
     chrome.storage.onChanged.addListener(async (changes) => {
+      if (changes.lovedLoads) lovedLoads = changes.lovedLoads.newValue || {};
       if (!changes.panelState || searchInput.value.trim()) return;
       const newState = changes.panelState.newValue;
       const win = await chrome.windows.getCurrent();
