@@ -24,6 +24,94 @@
   let lovedLoads    = {};   // loadKey → { record, savedAt }
   let _recPool      = {};   // loadKey → record, populated by renderRecs for heart click lookup
   let _regionsTimer = null;
+  let emailTemplates      = [];
+  let activeTemplateIndex = 0;
+  let gmailEmail          = '';
+  let filesMeta           = [];
+
+  // ── CSV utility functions (mirrored from popup.js for Setup tab) ─────────────
+  function parseCSV(text) {
+    const raw = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const logicalLines = []; let cur = '', inQ = false;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (ch === '"') { inQ = !inQ; cur += ch; }
+      else if (ch === '\n' && !inQ) { logicalLines.push(cur); cur = ''; }
+      else { cur += ch; }
+    }
+    if (cur) logicalLines.push(cur);
+    if (logicalLines.length < 2) return [];
+    const headers = csvSplitLine(logicalLines[0]).map(h => h.replace(/"/g,'').trim());
+    const rows = [];
+    for (let i = 1; i < logicalLines.length; i++) {
+      const line = logicalLines[i].trim(); if (!line) continue;
+      const vals = csvSplitLine(line); const row = {};
+      headers.forEach((h, j) => row[h] = (vals[j]||'').replace(/^"|"$/g,'').trim());
+      rows.push(row);
+    }
+    return rows;
+  }
+  function csvSplitLine(line) {
+    const vals = []; let cur = '', inQ = false;
+    for (const ch of line) {
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === ',' && !inQ) { vals.push(cur); cur = ''; }
+      else cur += ch;
+    }
+    vals.push(cur); return vals;
+  }
+  function buildIndexesFromCSVRows(rows, fileIdx) {
+    const odIdx = {}, oIdx = {}, brkIdx = {}; let count = 0;
+    for (const row of rows) {
+      const origin = (row['Origin']||row['PickCity']||row['Pick City']||row['Origin City']||row['From City']||row['Shipper City']||'').trim();
+      const dest   = (row['Destination']||row['DropCity']||row['Drop City']||row['Destination City']||row['To City']||row['Consignee City']||'').trim();
+      let rateClean = (row['Rate']||row['Total']||row['Gross']||row['Revenue']||row['Total Rate']||row['All In']||row['All-In']||row['Pay']||row['Line Haul']||row['Linehaul']||'').trim().replace(/[$\s]/g,'');
+      if ((rateClean.match(/\./g)||[]).length > 1) rateClean = rateClean.replace(/\.(?=.*\.)/g,'');
+      rateClean = rateClean.replace(/,/g,'');
+      const rate = isNaN(parseFloat(rateClean)) ? '' : String(parseFloat(rateClean));
+      const broker = (row['Broker']||row['Broker company name']||'').trim();
+      const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), _f: fileIdx };
+      if (!origin || origin.length < 2) continue; count++;
+      const no = normKey(origin), nd = normKey(dest);
+      if (no && nd) { const k = no+'|'+nd; if (!odIdx[k]) odIdx[k]=[]; odIdx[k].push(record); }
+      if (no) { if (!oIdx[no]) oIdx[no]=[]; oIdx[no].push(record); }
+      const nb = normBroker(broker);
+      if (nb) { if (!brkIdx[nb]) brkIdx[nb]=[]; brkIdx[nb].push(record); }
+    }
+    return { odIndex: odIdx, oIndex: oIdx, brokerIndex: brkIdx, count };
+  }
+  function mergeCSVIndexes(base, incoming) {
+    const out = {...base};
+    for (const [k, recs] of Object.entries(incoming||{})) { if (!out[k]) out[k]=[]; out[k] = out[k].concat(recs); }
+    return out;
+  }
+  function removeFromCSVIndex(index, fileIdx) {
+    const out = {};
+    for (const [k, recs] of Object.entries(index||{})) { if (!Array.isArray(recs)) continue; const f = recs.filter(r => r._f !== fileIdx); if (f.length) out[k] = f; }
+    return out;
+  }
+  function reIndexCSVFiles(index, removedIdx) {
+    const out = {};
+    for (const [k, recs] of Object.entries(index)) out[k] = recs.map(r => ({...r, _f: r._f > removedIdx ? r._f-1 : r._f}));
+    return out;
+  }
+  function countCSVIndex(odIdx) {
+    let n = 0; const seen = new Set();
+    for (const recs of Object.values(odIdx)) for (const r of recs) { const k = r.loadNum||(r.origin+'|'+(r.destination||'')+'|'+r.puDate); if (!seen.has(k)){seen.add(k);n++;} }
+    return n;
+  }
+
+  const DEFAULT_TEMPLATES = [
+    { name: 'Standard',
+      subject: 'Available {origin} to {destination}',
+      body: 'Hi, I have a truck available from {origin} to {destination} on {date}. Please let me know if you have something. {name} - {company}' },
+    { name: 'Follow Up',
+      subject: 'Following up - {origin} to {destination}',
+      body: 'Hi, following up to see if you have any loads from {origin} to {destination}. {name} - {company}' },
+    { name: 'Custom',
+      subject: '{origin} to {destination}',
+      body: 'Available from {origin} to {destination} on {date}. {name} - {company}' },
+  ];
   const _dbMatchCache = {};
   let _lastClickedRow = null;
   let _lastExpandKey = '';
@@ -282,10 +370,11 @@ if (so && ro && so !== ro) return false;
     }
     const origin  = cleanCity(originRaw);
     const dest    = cleanCity(destRaw);
-    const subject = emailSubject
+    const tpl     = emailTemplates[activeTemplateIndex];
+    const subject = (tpl?.subject || emailSubject)
       .replace(/\{origin\}/g, origin)
       .replace(/\{destination\}/g, dest);
-    const body    = emailTemplate
+    const body    = (tpl?.body || emailTemplate)
       .replace(/\{origin\}/g, origin)
       .replace(/\{destination\}/g, dest)
       .replace(/\{name\}/g, userName)
@@ -751,6 +840,235 @@ if (so && ro && so !== ro) return false;
   }
 
   // ── Panel ───────────────────────────────────────────────────────────────────
+  function renderTemplatesBody(bodyEl) {
+    const infoCard = `
+      <div style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;border:2px solid #e5e5ea;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:11px;font-weight:700;color:#1d1d1f;letter-spacing:.01em;margin-bottom:10px">Your Info</div>
+        <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Name</div>
+        <input id="dlm-info-name" type="text" value="${esc(userName)}" placeholder="Your name"
+               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:8px">
+        <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Company</div>
+        <input id="dlm-info-company" type="text" value="${esc(userCompany)}" placeholder="Your company"
+               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:10px">
+        <button class="dlm-info-save"
+                style="width:100%;padding:8px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.01em">
+          Save
+        </button>
+      </div>`;
+    const sendFromCard = `
+      <div style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;border:2px solid #e5e5ea;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+        <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Send From — Outbound Email</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input id="dlm-send-input" type="text" value="${esc(senderEmail)}" placeholder="Paste Gmail URL or your@gmail.com"
+                 style="flex:1;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;min-width:0;box-sizing:border-box">
+          <button class="dlm-send-save"
+                  style="padding:7px 12px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap">Save</button>
+        </div>
+        <div id="dlm-send-accts" style="display:flex;gap:4px;margin-bottom:8px">
+          ${[0,1,2,3,4].map(n => `<button class="dlm-send-acct" data-send-idx="${n}"
+              style="flex:1;padding:5px 0;border:none;border-radius:6px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;
+                     background:${n === senderGmailIndex ? '#0058e0' : 'rgba(0,0,0,.06)'};
+                     color:${n === senderGmailIndex ? '#fff' : '#6e6e73'}">${n}</button>`).join('')}
+        </div>
+        <div style="font-size:10px;color:#aeaeb2;line-height:1.4;margin-bottom:6px">Open your outbound Gmail → check URL for account number</div>
+        <div id="dlm-send-status" style="font-size:11px;font-weight:500;color:${senderEmail ? '#34c759' : '#aeaeb2'}">
+          ${senderEmail ? `✓ ${esc(senderEmail)}` : 'Not set'}
+        </div>
+      </div>`;
+    const tmpls = emailTemplates.length ? emailTemplates : DEFAULT_TEMPLATES;
+    bodyEl.innerHTML = sendFromCard + infoCard + tmpls.map((t, i) => {
+      const active = i === activeTemplateIndex;
+      return `
+        <div class="dlm-tpl-card${active ? ' dlm-tpl-active' : ''}" data-tpl-index="${i}"
+             style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;
+                    border:2px solid ${active ? '#34c759' : '#e5e5ea'};
+                    box-shadow:0 1px 4px rgba(0,0,0,.06)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <span style="font-size:11px;font-weight:700;color:#1d1d1f;letter-spacing:.01em">${esc(t.name)}</span>
+            <button class="dlm-tpl-use" data-tpl-index="${i}"
+                    style="font-size:10px;font-weight:700;padding:4px 10px;border-radius:7px;border:none;cursor:${active ? 'default' : 'pointer'};
+                           background:${active ? '#34c759' : '#0058e0'};color:#fff;opacity:${active ? '.7' : '1'};
+                           font-family:inherit;letter-spacing:.01em;transition:opacity .12s">
+              ${active ? '✓ Active' : 'Use This'}
+            </button>
+          </div>
+          <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Subject</div>
+          <textarea class="dlm-tpl-area dlm-tpl-subject" data-tpl-index="${i}" rows="2"
+                    style="margin-bottom:8px">${esc(t.subject)}</textarea>
+          <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Body</div>
+          <textarea class="dlm-tpl-area dlm-tpl-body" data-tpl-index="${i}" rows="4">${esc(t.body)}</textarea>
+        </div>`;
+    }).join('') +
+    `<div style="padding:4px 2px 8px;font-size:10px;color:#aeaeb2;line-height:1.5">
+       Variables: {origin} · {destination} · {name} · {company} · {date}
+     </div>`;
+  }
+
+  function renderSetupBody(bodyEl) {
+    const tmpls = filesMeta || [];
+    const LABEL = 'font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px';
+    const CARD  = 'background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;border:2px solid #e5e5ea;box-shadow:0 1px 4px rgba(0,0,0,.06)';
+    const INPUT = 'width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box';
+    const BTN   = 'padding:7px 12px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap';
+
+    const fileListHTML = tmpls.length
+      ? tmpls.map((f, i) => `
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(0,0,0,.04)">
+            <span style="font-size:12px;font-weight:600;color:#34c759;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px">📄 ${esc(f.name)}</span>
+            <span style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:10px;color:#aeaeb2">${f.count.toLocaleString()} lanes</span>
+              <button class="dlm-setup-file-remove" data-file-idx="${i}"
+                      style="background:none;border:none;color:#c7c7cc;cursor:pointer;font-size:13px;padding:0 2px;line-height:1;transition:color .15s">✕</button>
+            </span>
+          </div>`).join('')
+      : '<div style="font-size:12px;color:#aeaeb2;padding:8px 0">No CSV files loaded yet</div>';
+
+    bodyEl.innerHTML = `
+      <div style="${CARD}">
+        <div style="${LABEL}">Data Source</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:#1d1d1f">My CSV</div>
+            <div style="font-size:11px;color:#aeaeb2">Your own freight history</div>
+          </div>
+          <label style="position:relative;width:44px;height:24px;cursor:pointer;flex-shrink:0">
+            <input id="dlm-setup-csv-toggle" type="checkbox" ${useCSV ? 'checked' : ''} style="opacity:0;width:0;height:0;position:absolute">
+            <span id="dlm-csv-slider" style="position:absolute;inset:0;background:${useCSV ? '#34c759' : '#c7c7cc'};border-radius:34px;transition:background .2s">
+              <span style="position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s;transform:${useCSV ? 'translateX(20px)' : 'none'};box-shadow:0 1px 3px rgba(0,0,0,.25)"></span>
+            </span>
+          </label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:#1d1d1f">LaneIQ Database ${licenseTier !== 'pro' ? '<span style="font-size:10px;color:#ff9500">🔒 Pro</span>' : ''}</div>
+            <div style="font-size:11px;color:#aeaeb2">Market-wide rate data</div>
+          </div>
+          <label style="position:relative;width:44px;height:24px;cursor:${licenseTier === 'pro' ? 'pointer' : 'default'};flex-shrink:0;opacity:${licenseTier === 'pro' ? '1' : '.5'}">
+            <input id="dlm-setup-db-toggle" type="checkbox" ${useDB ? 'checked' : ''} ${licenseTier !== 'pro' ? 'disabled' : ''} style="opacity:0;width:0;height:0;position:absolute">
+            <span id="dlm-db-slider" style="position:absolute;inset:0;background:${useDB ? '#34c759' : '#c7c7cc'};border-radius:34px;transition:background .2s">
+              <span style="position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s;transform:${useDB ? 'translateX(20px)' : 'none'};box-shadow:0 1px 3px rgba(0,0,0,.25)"></span>
+            </span>
+          </label>
+        </div>
+        <div id="dlm-setup-ds-status" style="font-size:11px;color:#aeaeb2;margin-top:8px">
+          ${useCSV && useDB ? 'Both sources active' : useCSV ? 'My CSV active' : useDB ? 'LaneIQ Database active' : 'No data source selected'}
+        </div>
+      </div>
+
+      <div style="${CARD}">
+        <div style="${LABEL}">Freight History CSV</div>
+        <div id="dlm-setup-file-list">${fileListHTML}</div>
+        <div id="dlm-setup-dropzone" style="border:2px dashed rgba(0,0,0,.12);border-radius:10px;padding:16px;text-align:center;cursor:pointer;margin-top:8px;background:#fafafa;transition:border-color .15s,background .15s">
+          <div style="font-size:20px;color:#aeaeb2;margin-bottom:5px">📂</div>
+          <div style="font-size:12px;font-weight:600;color:#6e6e73">Drop CSV files here</div>
+          <div style="font-size:11px;color:#aeaeb2;margin-top:2px">or click to browse</div>
+          <input id="dlm-setup-file-input" type="file" accept=".csv" multiple style="display:none">
+        </div>
+        <div id="dlm-setup-progress" style="display:none;margin-top:8px">
+          <div style="height:3px;background:rgba(0,0,0,.08);border-radius:2px;overflow:hidden">
+            <div id="dlm-setup-progress-fill" style="height:100%;background:#0058e0;width:0%;transition:width .3s"></div>
+          </div>
+          <div id="dlm-setup-progress-text" style="font-size:10px;color:#aeaeb2;margin-top:4px;text-align:center">Processing…</div>
+        </div>
+      </div>
+
+      <div style="${CARD}">
+        <div style="${LABEL}">Gmail — Rate Confirmations</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input id="dlm-setup-gmail-input" type="text" value="${esc(gmailEmail)}" placeholder="Paste Gmail URL or your email"
+                 style="${INPUT};flex:1;min-width:0">
+          <button class="dlm-setup-gmail-save" style="${BTN}">Save</button>
+        </div>
+        <div style="display:flex;gap:4px;margin-bottom:8px">
+          ${[0,1,2,3,4].map(n => `<button class="dlm-setup-acct-btn" data-gmail-idx="${n}"
+              style="flex:1;padding:5px 0;border:1px solid rgba(0,0,0,.1);border-radius:6px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;
+                     background:${n === gmailIndex ? '#0058e0' : 'rgba(0,0,0,.05)'};
+                     color:${n === gmailIndex ? '#fff' : '#6e6e73'}">${n}</button>`).join('')}
+        </div>
+        <div style="font-size:10px;color:#aeaeb2;line-height:1.5;margin-bottom:6px">Open your freight Gmail → check URL: mail.google.com/mail/<strong>u/1</strong>/</div>
+        <div id="dlm-setup-gmail-status" style="font-size:11px;font-weight:500;color:${gmailEmail ? '#34c759' : '#aeaeb2'}">
+          ${gmailEmail ? `✓ ${esc(gmailEmail)} · Account #${gmailIndex}` : 'Not configured yet'}
+        </div>
+      </div>
+
+      <div style="${CARD}">
+        <div style="${LABEL}">Highlight Guide</div>
+        ${[['rgba(167,139,250,.3)','#a78bfa','Same lane + same broker — call immediately'],
+           ['rgba(52,199,89,.25)','#34c759','Same lane — ran 3+ times'],
+           ['rgba(251,191,36,.3)','#fbbf24','Same lane — ran 1–2 times'],
+           ['rgba(96,165,250,.3)','#60a5fa','Same pickup city + state']].map(([bg,border,label]) =>
+          `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px;color:#6e6e73">
+             <div style="width:12px;height:12px;border-radius:3px;flex-shrink:0;background:${bg};border:1px solid ${border}"></div>${label}
+           </div>`).join('')}
+      </div>`;
+
+    // Wire drop zone after innerHTML is set
+    const dz  = bodyEl.querySelector('#dlm-setup-dropzone');
+    const fi  = bodyEl.querySelector('#dlm-setup-file-input');
+    if (dz && fi) {
+      dz.addEventListener('click',     () => fi.click());
+      dz.addEventListener('dragover',  e => { e.preventDefault(); dz.style.borderColor='#0058e0'; dz.style.background='rgba(0,88,224,.04)'; });
+      dz.addEventListener('dragleave', () => { dz.style.borderColor=''; dz.style.background='#fafafa'; });
+      dz.addEventListener('drop',      e => { e.preventDefault(); dz.style.borderColor=''; dz.style.background='#fafafa'; processSetupCSV(Array.from(e.dataTransfer.files), bodyEl); });
+      fi.addEventListener('change',    e => processSetupCSV(Array.from(e.target.files), bodyEl));
+    }
+    // Wire data source toggles after innerHTML
+    const csvToggle = bodyEl.querySelector('#dlm-setup-csv-toggle');
+    const dbToggle  = bodyEl.querySelector('#dlm-setup-db-toggle');
+    if (csvToggle) csvToggle.addEventListener('change', async () => {
+      useCSV = csvToggle.checked;
+      await chrome.storage.local.set({ useCSV });
+      renderSetupBody(bodyEl);
+    });
+    if (dbToggle) dbToggle.addEventListener('change', async () => {
+      if (licenseTier !== 'pro') {
+        dbToggle.checked = false;
+        const st = bodyEl.querySelector('#dlm-setup-ds-status');
+        if (st) { st.textContent = '🔒 Pro feature — upgrade to unlock LaneIQ Database'; st.style.color = '#ff9500'; }
+        return;
+      }
+      useDB = dbToggle.checked;
+      await chrome.storage.local.set({ useDB });
+      renderSetupBody(bodyEl);
+    });
+  }
+
+  async function processSetupCSV(files, bodyEl) {
+    const csvFiles = files.filter(f => f.name.endsWith('.csv'));
+    if (!csvFiles.length) return;
+    const progress     = bodyEl.querySelector('#dlm-setup-progress');
+    const progressFill = bodyEl.querySelector('#dlm-setup-progress-fill');
+    const progressText = bodyEl.querySelector('#dlm-setup-progress-text');
+    if (progress) progress.style.display = 'block';
+    const stored = await chrome.storage.local.get(['filesMeta','odIndex','oIndex','brokerIndex']);
+    let existingMeta = stored.filesMeta || [];
+    let existingOD   = stored.odIndex   || {};
+    let existingO    = stored.oIndex    || {};
+    let existingBrk  = stored.brokerIndex || {};
+    const startIdx = existingMeta.length;
+    const newMeta  = [];
+    for (let i = 0; i < csvFiles.length; i++) {
+      const file = csvFiles[i];
+      if (progressText) progressText.textContent = `Parsing ${file.name}…`;
+      if (progressFill) progressFill.style.width  = Math.round(20 + (i / csvFiles.length) * 60) + '%';
+      const text = await file.text();
+      const rows = parseCSV(text);
+      const { odIndex: nOD, oIndex: nO, brokerIndex: nB, count } = buildIndexesFromCSVRows(rows, startIdx + i);
+      if (count === 0) { if (progress) progress.style.display = 'none'; return; }
+      existingOD  = mergeCSVIndexes(existingOD, nOD);
+      existingO   = mergeCSVIndexes(existingO,  nO);
+      existingBrk = mergeCSVIndexes(existingBrk, nB);
+      newMeta.push({ name: file.name, count });
+    }
+    if (progressFill) progressFill.style.width = '90%';
+    if (progressText) progressText.textContent = 'Saving…';
+    const combinedMeta = existingMeta.concat(newMeta);
+    const totalCount   = combinedMeta.reduce((s, f) => s + f.count, 0);
+    await chrome.storage.local.set({ filesMeta: combinedMeta, odIndex: existingOD, oIndex: existingO, brokerIndex: existingBrk, laneCount: totalCount, indexVersion: INDEX_VERSION, loadedAt: new Date().toISOString() });
+    filesMeta = combinedMeta;
+    if (progress) { progressFill.style.width = '100%'; progressText.textContent = `Done — ${totalCount.toLocaleString()} lanes`; setTimeout(() => { progress.style.display = 'none'; renderSetupBody(bodyEl); }, 1200); }
+  }
+
   function showLovedSearchResults(q) {
     const bodyEl = document.getElementById('dlm-body');
     if (!bodyEl) return;
@@ -849,6 +1167,14 @@ if (so && ro && so !== ro) return false;
           renderRecs(recs, '#e05c5c', 999, true, true, new Set(Object.keys(lovedLoads)))
         : '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Tap ♡ on any load<br>to mark it as preferred</div>';
       bodyEl.scrollTop = 0;
+    } else if (name === 'templates') {
+      if (searchWrap) searchWrap.style.display = 'none';
+      renderTemplatesBody(bodyEl);
+      bodyEl.scrollTop = 0;
+    } else if (name === 'setup') {
+      if (searchWrap) searchWrap.style.display = 'none';
+      renderSetupBody(bodyEl);
+      bodyEl.scrollTop = 0;
     } else if (name === 'regions') {
       if (searchWrap) searchWrap.style.display = 'none';
       renderRegionsBody(bodyEl);
@@ -872,19 +1198,25 @@ if (so && ro && so !== ro) return false;
           <button id="dlm-close" title="Close">✕</button>
         </div>
       </div>
-      <div id="dlm-tabs">
-        <button class="dlm-tab dlm-tab-active" data-tab="history">Load History</button>
-        <button class="dlm-tab" data-tab="loved">♥ Preferred</button>
-        <button class="dlm-tab" data-tab="regions">Hot Regions</button>
-      </div>
-      <div id="dlm-search-wrap">
-        <span style="color:#4b5563;font-size:13px;flex-shrink:0;line-height:1">⌕</span>
-        <input id="dlm-search" type="text" placeholder="Search origin, destination, broker, load #…" autocomplete="off" spellcheck="false">
-        <button id="dlm-search-clear" title="Clear search">✕</button>
-      </div>
-      <div id="dlm-body">
-        <div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6;letter-spacing:-.01em">
-          Click a highlighted row<br>to see booking history
+      <div id="dlm-panel-main">
+        <div id="dlm-sidebar">
+          <button class="dlm-tab dlm-tab-active" data-tab="history">Load History</button>
+          <button class="dlm-tab" data-tab="loved">Preferred</button>
+          <button class="dlm-tab" data-tab="regions">Hot Regions</button>
+          <button class="dlm-tab" data-tab="templates">Templates</button>
+          <button class="dlm-tab" data-tab="setup">Setup</button>
+        </div>
+        <div id="dlm-content">
+          <div id="dlm-search-wrap">
+            <span style="color:#4b5563;font-size:13px;flex-shrink:0;line-height:1">⌕</span>
+            <input id="dlm-search" type="text" placeholder="Search origin, destination, broker, load #…" autocomplete="off" spellcheck="false">
+            <button id="dlm-search-clear" title="Clear search">✕</button>
+          </div>
+          <div id="dlm-body">
+            <div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6;letter-spacing:-.01em">
+              Click a highlighted row<br>to see booking history
+            </div>
+          </div>
         </div>
       </div>
       <div id="dlm-corner"></div>`;
@@ -979,7 +1311,7 @@ if (so && ro && so !== ro) return false;
         d.style.right = 'auto';
       }
       if (isResizing) {
-        const newWidth = Math.max(220, Math.min(560, resizeRightEdge - e.clientX));
+        const newWidth = Math.max(450, Math.min(650, resizeRightEdge - e.clientX));
         d.style.width = newWidth + 'px';
         d.style.left  = (resizeRightEdge - newWidth) + 'px';
         if (resizeCorner) {
@@ -1019,6 +1351,126 @@ if (so && ro && so !== ro) return false;
       chrome.storage.local.set({ lovedLoads });
       if (_activeTab === 'loved') switchTab('loved');
     });
+
+    // Templates delegation — Your Info save + Send From + Use This button + textarea auto-save
+    d.querySelector('#dlm-body').addEventListener('click', async e => {
+      if (e.target.closest('.dlm-info-save')) {
+        const nameVal    = document.getElementById('dlm-info-name')?.value.trim()    || '';
+        const companyVal = document.getElementById('dlm-info-company')?.value.trim() || '';
+        userName    = nameVal;
+        userCompany = companyVal;
+        chrome.storage.local.set({ userName: nameVal, userCompany: companyVal });
+        const btn = e.target.closest('.dlm-info-save');
+        const orig = btn.textContent;
+        btn.textContent = 'Saved ✓';
+        btn.style.background = '#34c759';
+        setTimeout(() => { btn.textContent = orig; btn.style.background = '#0058e0'; }, 1500);
+        return;
+      }
+      if (e.target.closest('.dlm-send-save')) {
+        const raw = document.getElementById('dlm-send-input')?.value.trim() || '';
+        const urlMatch = raw.match(/mail\.google\.com\/mail\/u\/(\d+)/);
+        const btn = e.target.closest('.dlm-send-save');
+        if (urlMatch) {
+          senderGmailIndex = parseInt(urlMatch[1]);
+          senderEmail = `Account #${senderGmailIndex}`;
+        } else if (raw && raw.includes('@')) {
+          senderEmail = raw;
+        } else {
+          const statusEl = document.getElementById('dlm-send-status');
+          if (statusEl) { statusEl.textContent = 'Enter a valid email or Gmail URL'; statusEl.style.color = '#ff3b30'; }
+          return;
+        }
+        chrome.storage.local.set({ senderEmail, senderGmailIndex });
+        renderTemplatesBody(e.currentTarget);
+        btn.textContent = 'Saved ✓';
+        btn.style.background = '#34c759';
+        setTimeout(() => { btn.textContent = 'Save'; btn.style.background = '#0058e0'; }, 1500);
+        return;
+      }
+      if (e.target.closest('.dlm-send-acct')) {
+        const acctBtn = e.target.closest('.dlm-send-acct');
+        senderGmailIndex = parseInt(acctBtn.dataset.sendIdx, 10);
+        if (senderEmail.startsWith('Account #')) senderEmail = `Account #${senderGmailIndex}`;
+        chrome.storage.local.set({ senderGmailIndex, senderEmail });
+        const acctBtns = document.getElementById('dlm-send-accts');
+        if (acctBtns) acctBtns.querySelectorAll('.dlm-send-acct').forEach(b => {
+          const active = parseInt(b.dataset.sendIdx) === senderGmailIndex;
+          b.style.background = active ? '#0058e0' : 'rgba(0,0,0,.06)';
+          b.style.color      = active ? '#fff'     : '#6e6e73';
+        });
+        const statusEl = document.getElementById('dlm-send-status');
+        if (statusEl && senderEmail) {
+          statusEl.textContent = `✓ ${senderEmail}`;
+          statusEl.style.color = '#34c759';
+        }
+        return;
+      }
+      if (e.target.closest('.dlm-setup-file-remove')) {
+        const removeBtn = e.target.closest('.dlm-setup-file-remove');
+        const idx = parseInt(removeBtn.dataset.fileIdx, 10);
+        if (isNaN(idx)) return;
+        const stored = await chrome.storage.local.get(['filesMeta','odIndex','oIndex','brokerIndex']);
+        let meta = stored.filesMeta || [];
+        let odI  = removeFromCSVIndex(stored.odIndex     || {}, idx);
+        let oI   = removeFromCSVIndex(stored.oIndex      || {}, idx);
+        let bI   = removeFromCSVIndex(stored.brokerIndex || {}, idx);
+        odI = reIndexCSVFiles(odI, idx); oI = reIndexCSVFiles(oI, idx); bI = reIndexCSVFiles(bI, idx);
+        const newMeta = meta.filter((_, i) => i !== idx);
+        const count   = countCSVIndex(odI);
+        await chrome.storage.local.set({ filesMeta: newMeta, odIndex: odI, oIndex: oI, brokerIndex: bI, laneCount: count, indexVersion: INDEX_VERSION });
+        filesMeta = newMeta;
+        const el = document.getElementById('dlm-body');
+        if (el && _activeTab === 'setup') renderSetupBody(el);
+        return;
+      }
+      if (e.target.closest('.dlm-setup-gmail-save')) {
+        const raw = document.getElementById('dlm-setup-gmail-input')?.value.trim() || '';
+        const urlMatch = raw.match(/mail\.google\.com\/mail\/u\/(\d+)/);
+        if (urlMatch) {
+          gmailIndex  = parseInt(urlMatch[1]);
+          gmailEmail  = `Account #${gmailIndex}`;
+        } else if (raw && raw.includes('@')) {
+          gmailEmail  = raw;
+        }
+        await chrome.storage.local.set({ gmailEmail, gmailIndex });
+        const el = document.getElementById('dlm-body');
+        if (el && _activeTab === 'setup') renderSetupBody(el);
+        return;
+      }
+      if (e.target.closest('.dlm-setup-acct-btn')) {
+        const acctBtn = e.target.closest('.dlm-setup-acct-btn');
+        gmailIndex = parseInt(acctBtn.dataset.gmailIdx, 10);
+        await chrome.storage.local.set({ gmailIndex });
+        document.querySelectorAll('.dlm-setup-acct-btn').forEach(b => {
+          const a = parseInt(b.dataset.gmailIdx) === gmailIndex;
+          b.style.background = a ? '#007aff' : 'rgba(0,0,0,.05)';
+          b.style.color      = a ? '#fff'    : '#6e6e73';
+        });
+        const st = document.getElementById('dlm-setup-gmail-status');
+        if (st) { st.textContent = `✓ ${gmailEmail || 'Account #'+gmailIndex} · Account #${gmailIndex}`; st.style.color = '#34c759'; }
+        return;
+      }
+      const useBtn = e.target.closest('.dlm-tpl-use');
+      if (!useBtn) return;
+      const idx = parseInt(useBtn.dataset.tplIndex, 10);
+      if (isNaN(idx) || idx === activeTemplateIndex) return;
+      activeTemplateIndex = idx;
+      chrome.storage.local.set({ activeTemplate: idx });
+      renderTemplatesBody(e.currentTarget);
+    });
+
+    d.querySelector('#dlm-body').addEventListener('blur', e => {
+      const area = e.target.closest('.dlm-tpl-area');
+      if (!area) return;
+      const idx = parseInt(area.dataset.tplIndex, 10);
+      if (isNaN(idx)) return;
+      const tmpls = emailTemplates.length ? emailTemplates : DEFAULT_TEMPLATES.map(t => ({...t}));
+      if (area.classList.contains('dlm-tpl-subject')) tmpls[idx].subject = area.value;
+      if (area.classList.contains('dlm-tpl-body'))    tmpls[idx].body    = area.value;
+      emailTemplates = tmpls;
+      chrome.storage.local.set({ emailTemplates: tmpls });
+    }, true);
 
     return d;
   }
@@ -1540,7 +1992,7 @@ if (so && ro && so !== ro) return false;
       processRow(r);
       injectEmailChip(r);
     });
-    if (_cityFailCount > 5) {
+    if (_cityFailCount > 10) {
       reportSelectorError('city-extraction-failed', `${_cityFailCount} rows failed city extraction in one scan`);
     }
     if (usingAPI) scheduleBatchHighlight();
@@ -1605,12 +2057,12 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta']);
 
     // Resolve tier/dataSource early so we can use them in the guards below
     licenseTier = s.licenseTier || 'solo';
     useCSV = s.useCSV !== false;
-    useDB  = s.useDB  === true;
+    useDB  = s.useDB  ?? true;
     licenseKey  = lic.licenseKey || '';
     const usingAPI = licenseTier === 'pro' && useDB;
 
@@ -1648,7 +2100,16 @@ Thanks,
     dlmMpg         = +s.dlmMpg         || 6.5;
     dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
     dlmDriverRate  = +s.dlmDriverRate  || 0;
-    lovedLoads     = s.lovedLoads      || {};
+    lovedLoads          = s.lovedLoads      || {};
+    gmailEmail          = s.gmailEmail      || '';
+    filesMeta           = s.filesMeta       || [];
+    emailTemplates      = s.emailTemplates  || DEFAULT_TEMPLATES.map(t => ({...t}));
+    activeTemplateIndex = s.activeTemplate  ?? 0;
+    // Migrate old template names if user has the previous defaults saved
+    const nameMap = { 'Template 1': 'Standard', 'Template 2': 'Follow Up', 'Template 3': 'Custom' };
+    let migrated = false;
+    emailTemplates.forEach(t => { if (nameMap[t.name]) { t.name = nameMap[t.name]; migrated = true; } });
+    if (migrated) chrome.storage.local.set({ emailTemplates });
     _initialized = true;
 
     function clearAllHighlights() {
@@ -1685,7 +2146,13 @@ Thanks,
       if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
       if ('emailTemplate' in changes)    emailTemplate    = changes.emailTemplate.newValue    || emailTemplate;
       if ('senderGmailIndex' in changes) senderGmailIndex = typeof changes.senderGmailIndex.newValue !== 'undefined' ? changes.senderGmailIndex.newValue : 0;
-      if ('lovedLoads' in changes) lovedLoads = changes.lovedLoads.newValue || {};
+      if ('senderEmail' in changes)      senderEmail      = changes.senderEmail.newValue      || '';
+      if ('lovedLoads' in changes)      lovedLoads  = changes.lovedLoads.newValue  || {};
+      if ('gmailEmail' in changes)      gmailEmail  = changes.gmailEmail.newValue  || '';
+      if ('gmailIndex' in changes)      gmailIndex  = changes.gmailIndex.newValue  ?? 0;
+      if ('filesMeta'  in changes)      filesMeta   = changes.filesMeta.newValue   || [];
+      if ('emailTemplates' in changes)  emailTemplates      = changes.emailTemplates.newValue  || DEFAULT_TEMPLATES.map(t => ({...t}));
+      if ('activeTemplate' in changes)  activeTemplateIndex = changes.activeTemplate.newValue  ?? 0;
       if ('useCSV' in changes || 'useDB' in changes || 'laneCount' in changes) {
         clearAllHighlights();
         _initialized = false;
