@@ -222,7 +222,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       'gmailEmail', 'gmailIndex',
       'senderEmail', 'senderGmailIndex',
       'emailTemplate', 'emailSubject', 'emailTemplates', 'activeTemplate',
-      'userName', 'userCompany',
+      'signature',
       'mapsApiKey',
       'lovedLoads',
       'licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier',

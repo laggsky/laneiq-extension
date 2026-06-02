@@ -10,8 +10,7 @@
   let _recPool            = {};
   let emailTemplates      = [];
   let activeTemplateIndex = 0;
-  let userName            = '';
-  let userCompany         = '';
+  let signature           = '';
   let senderGmailIndex    = 0;
   let gmailOAuthEmail     = '';
   let outlookOAuthEmail   = '';
@@ -41,13 +40,13 @@
   const DEFAULT_TEMPLATES = [
     { name: 'Standard',
       subject: 'Available {origin} to {destination} loading on {date}',
-      body: 'Hi, I have a truck available {miles} miles out from {origin} to {destination} on {date}. Please let me know if you have something. {name} - {company}' },
+      body: 'Hi, I have a truck available {miles} miles out from {origin} to {destination} on {date}. Please let me know if you have something.\n\n{signature}' },
     { name: 'Follow Up',
       subject: 'Following up - {origin} to {destination} loading on {date}',
-      body: 'Hi, following up to see if you have any loads from {origin} to {destination}. {name} - {company}' },
+      body: 'Hi, following up to see if you have any loads from {origin} to {destination}.\n\n{signature}' },
     { name: 'Custom',
       subject: '{origin} to {destination} loading on {date}',
-      body: 'Available from {origin} to {destination} on {date}. {name} - {company}' },
+      body: 'Available from {origin} to {destination} on {date}.\n\n{signature}' },
   ];
 
   // ── Utilities (mirrored from content.js) ─────────────────────────────────
@@ -152,13 +151,9 @@
     if (!bodyEl) return;
     const infoCard = `
       <div style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;border:2px solid #e5e5ea;box-shadow:0 1px 4px rgba(0,0,0,.06)">
-        <div style="font-size:11px;font-weight:700;color:#1d1d1f;letter-spacing:.01em;margin-bottom:10px">Your Info</div>
-        <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Name</div>
-        <input id="dlm-info-name" type="text" value="${esc(userName)}" placeholder="Your name"
-               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:8px">
-        <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Company</div>
-        <input id="dlm-info-company" type="text" value="${esc(userCompany)}" placeholder="Your company"
-               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:700;color:#1d1d1f;letter-spacing:.01em;margin-bottom:10px">Signature</div>
+        <textarea id="dlm-info-signature" rows="4" placeholder="Alex&#10;LaneIQ&#10;(555) 123-4567"
+               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:10px;resize:vertical">${esc(signature)}</textarea>
         <button class="dlm-info-save"
                 style="width:100%;padding:8px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.01em">
           Save
@@ -205,7 +200,7 @@
           <textarea class="dlm-tpl-area dlm-tpl-subject" data-tpl-index="${i}" rows="2"
                     style="margin-bottom:8px">${esc(t.subject)}</textarea>
           <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Body</div>
-          <textarea class="dlm-tpl-area dlm-tpl-body" data-tpl-index="${i}" rows="4">${esc(t.body)}</textarea>
+          <textarea class="dlm-tpl-area dlm-tpl-body" data-tpl-index="${i}" rows="6">${esc(t.body)}</textarea>
           <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
             <button class="dlm-tpl-reset" data-tpl-index="${i}"
               style="padding:6px 12px;background:rgba(0,0,0,.06);color:#6e6e73;border:none;border-radius:8px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer">
@@ -219,7 +214,7 @@
         </div>`;
     }).join('') +
     `<div style="padding:4px 2px 8px;font-size:10px;color:#aeaeb2;line-height:1.5">
-       Variables: {origin} · {destination} · {name} · {company} · {date} · {miles}
+       Variables: {origin} · {destination} · {date} · {miles} · {signature}
      </div>`;
   }
 
@@ -740,7 +735,7 @@
   // ── Init ──────────────────────────────────────────────────────────────────
   async function init() {
     const s = await chrome.storage.local.get([
-      'panelState','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','odIndex','oIndex','brokerIndex','lovedLoads','emailTemplates','activeTemplate','userName','userCompany','senderGmailIndex','useCSV','useDB','licenseTier','filesMeta'
+      'panelState','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','odIndex','oIndex','brokerIndex','lovedLoads','emailTemplates','activeTemplate','signature','senderGmailIndex','useCSV','useDB','licenseTier','filesMeta'
     ]);
     gmailIndex          = s.gmailIndex  || 0;
     odIndex             = s.odIndex     || {};
@@ -754,8 +749,7 @@
     let migrated = false;
     emailTemplates.forEach(t => { if (nameMap[t.name]) { t.name = nameMap[t.name]; migrated = true; } });
     if (migrated) chrome.storage.local.set({ emailTemplates });
-    userName            = s.userName         || '';
-    userCompany         = s.userCompany      || '';
+    signature           = s.signature        || '';
     gmailOAuthEmail     = s.gmailOAuthEmail   || '';
     outlookOAuthEmail   = s.outlookOAuthEmail || '';
     senderGmailIndex    = s.senderGmailIndex ?? 0;
@@ -818,11 +812,9 @@
     // Template click delegation (Use This) and blur (auto-save)
     document.getElementById('dlm-body').addEventListener('click', async e => {
       if (e.target.closest('.dlm-info-save')) {
-        const nameVal    = document.getElementById('dlm-info-name')?.value.trim()    || '';
-        const companyVal = document.getElementById('dlm-info-company')?.value.trim() || '';
-        userName    = nameVal;
-        userCompany = companyVal;
-        chrome.storage.local.set({ userName: nameVal, userCompany: companyVal });
+        const sigVal = (document.getElementById('dlm-info-signature')?.value || '').replace(/\s+$/, '');
+        signature = sigVal;
+        chrome.storage.local.set({ signature: sigVal });
         const btn = e.target.closest('.dlm-info-save');
         const orig = btn.textContent;
         btn.textContent = 'Saved ✓';
@@ -985,8 +977,7 @@
       if (changes.lovedLoads)     lovedLoads          = changes.lovedLoads.newValue     || {};
       if (changes.emailTemplates) emailTemplates      = changes.emailTemplates.newValue || DEFAULT_TEMPLATES.map(t => ({...t}));
       if (changes.activeTemplate) activeTemplateIndex = changes.activeTemplate.newValue ?? 0;
-      if (changes.userName)         userName         = changes.userName.newValue         || '';
-      if (changes.userCompany)      userCompany      = changes.userCompany.newValue      || '';
+      if (changes.signature)        signature        = changes.signature.newValue        || '';
       if (changes.gmailOAuthEmail)  gmailOAuthEmail  = changes.gmailOAuthEmail.newValue  || '';
       if (changes.outlookOAuthEmail) outlookOAuthEmail = changes.outlookOAuthEmail.newValue || '';
       if (changes.senderGmailIndex) senderGmailIndex = changes.senderGmailIndex.newValue ?? 0;

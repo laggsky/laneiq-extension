@@ -11,7 +11,7 @@
   let emailSubject = '', emailTemplate = '', senderGmailIndex = 0;
   let gmailOAuthEmail = '';
   let outlookOAuthEmail = '';
-  let userName = '', userCompany = '';
+  let signature = '';
   let gmailIndex = 0;
   let panel = null;
   let panelBodyHTML = '';
@@ -107,13 +107,13 @@
   const DEFAULT_TEMPLATES = [
     { name: 'Standard',
       subject: 'Available {origin} to {destination} loading on {date}',
-      body: 'Hi, I have a truck available {miles} miles out from {origin} to {destination} on {date}. Please let me know if you have something. {name} - {company}' },
+      body: 'Hi, I have a truck available {miles} miles out from {origin} to {destination} on {date}. Please let me know if you have something.\n\n{signature}' },
     { name: 'Follow Up',
       subject: 'Following up - {origin} to {destination} loading on {date}',
-      body: 'Hi, following up to see if you have any loads from {origin} to {destination}. {name} - {company}' },
+      body: 'Hi, following up to see if you have any loads from {origin} to {destination}.\n\n{signature}' },
     { name: 'Custom',
       subject: '{origin} to {destination} loading on {date}',
-      body: 'Available from {origin} to {destination} on {date}. {name} - {company}' },
+      body: 'Available from {origin} to {destination} on {date}.\n\n{signature}' },
   ];
   let _dbMatchCache = {};
   let _lastClickedRow = null;
@@ -381,10 +381,9 @@ if (so && ro && so !== ro) return false;
   async function sendEmail(brokerEmail, originRaw, destRaw, dateRaw = '', milesRaw = '') {
     // Belt-and-suspenders: refresh name/company from storage if in-memory is empty.
     // Handles the edge case where the popup saved them just before this click.
-    if (!userName || !userCompany) {
-      const stored = await chrome.storage.local.get(['userName', 'userCompany']);
-      if (!userName    && stored.userName)    userName    = stored.userName;
-      if (!userCompany && stored.userCompany) userCompany = stored.userCompany;
+    if (!signature) {
+      const stored = await chrome.storage.local.get(['signature']);
+      if (stored.signature) signature = stored.signature;
     }
     const origin  = cleanCity(originRaw);
     const dest    = cleanCity(destRaw);
@@ -395,16 +394,19 @@ if (so && ro && so !== ro) return false;
     const fillMiles = (s) => milesRaw
       ? s.replace(/\{miles\}/g, milesRaw)
       : s.replace(/\{miles\}\s*miles out from/gi, 'from').replace(/\{miles\}/g, '');
-    const subject = fillMiles(tpl?.subject || emailSubject)
+    // {signature}: substitute when set; when empty, drop the token AND its
+    // leading blank line(s), then trim trailing whitespace so no blank line dangles.
+    const fillSignature = (s) => signature
+      ? s.replace(/\{signature\}/g, signature)
+      : s.replace(/\s*\{signature\}/g, '').replace(/\s+$/, '');
+    const subject = fillSignature(fillMiles(tpl?.subject || emailSubject)
       .replace(/\{origin\}/g, origin)
       .replace(/\{destination\}/g, dest)
-      .replace(/\{date\}/g, dateRaw);
-    const body    = fillMiles(tpl?.body || emailTemplate)
+      .replace(/\{date\}/g, dateRaw));
+    const body    = fillSignature(fillMiles(tpl?.body || emailTemplate)
       .replace(/\{origin\}/g, origin)
       .replace(/\{destination\}/g, dest)
-      .replace(/\{name\}/g, userName)
-      .replace(/\{company\}/g, userCompany)
-      .replace(/\{date\}/g, dateRaw);
+      .replace(/\{date\}/g, dateRaw));
 
     async function sendEmailViaGmail(to, subj, bdy) {
       try {
@@ -1000,13 +1002,9 @@ if (so && ro && so !== ro) return false;
     if (!bodyEl) return;
     const infoCard = `
       <div style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;border:2px solid #e5e5ea;box-shadow:0 1px 4px rgba(0,0,0,.06)">
-        <div style="font-size:11px;font-weight:700;color:#1d1d1f;letter-spacing:.01em;margin-bottom:10px">Your Info</div>
-        <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Name</div>
-        <input id="dlm-info-name" type="text" value="${esc(userName)}" placeholder="Your name"
-               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:8px">
-        <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Company</div>
-        <input id="dlm-info-company" type="text" value="${esc(userCompany)}" placeholder="Your company"
-               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:700;color:#1d1d1f;letter-spacing:.01em;margin-bottom:10px">Signature</div>
+        <textarea id="dlm-info-signature" rows="4" placeholder="Alex&#10;LaneIQ&#10;(555) 123-4567"
+               style="width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box;margin-bottom:10px;resize:vertical">${esc(signature)}</textarea>
         <button class="dlm-info-save"
                 style="width:100%;padding:8px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.01em">
           Save
@@ -1053,7 +1051,7 @@ if (so && ro && so !== ro) return false;
           <textarea class="dlm-tpl-area dlm-tpl-subject" data-tpl-index="${i}" rows="2"
                     style="margin-bottom:8px">${esc(t.subject)}</textarea>
           <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Body</div>
-          <textarea class="dlm-tpl-area dlm-tpl-body" data-tpl-index="${i}" rows="4">${esc(t.body)}</textarea>
+          <textarea class="dlm-tpl-area dlm-tpl-body" data-tpl-index="${i}" rows="6">${esc(t.body)}</textarea>
           <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
             <button class="dlm-tpl-reset" data-tpl-index="${i}"
               style="padding:6px 12px;background:rgba(0,0,0,.06);color:#6e6e73;border:none;border-radius:8px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer">
@@ -1067,7 +1065,7 @@ if (so && ro && so !== ro) return false;
         </div>`;
     }).join('') +
     `<div style="padding:4px 2px 8px;font-size:10px;color:#aeaeb2;line-height:1.5">
-       Variables: {origin} · {destination} · {name} · {company} · {date} · {miles}
+       Variables: {origin} · {destination} · {date} · {miles} · {signature}
      </div>`;
   }
 
@@ -1616,11 +1614,9 @@ if (so && ro && so !== ro) return false;
     // Templates delegation — Your Info save + Send From + Use This button + textarea auto-save
     d.querySelector('#dlm-body').addEventListener('click', async e => {
       if (e.target.closest('.dlm-info-save')) {
-        const nameVal    = document.getElementById('dlm-info-name')?.value.trim()    || '';
-        const companyVal = document.getElementById('dlm-info-company')?.value.trim() || '';
-        userName    = nameVal;
-        userCompany = companyVal;
-        chrome.storage.local.set({ userName: nameVal, userCompany: companyVal });
+        const sigVal = (document.getElementById('dlm-info-signature')?.value || '').replace(/\s+$/, '');
+        signature = sigVal;
+        chrome.storage.local.set({ signature: sigVal });
         const btn = e.target.closest('.dlm-info-save');
         const orig = btn.textContent;
         btn.textContent = 'Saved ✓';
@@ -2444,7 +2440,7 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height']);
 
     // Resolve tier/dataSource early so we can use them in the guards below
     licenseTier = s.licenseTier || 'solo';
@@ -2485,16 +2481,13 @@ if (so && ro && so !== ro) return false;
     gmailOAuthEmail  = s.gmailOAuthEmail || '';
     outlookOAuthEmail = s.outlookOAuthEmail || '';
     senderGmailIndex = typeof s.senderGmailIndex !== 'undefined' ? s.senderGmailIndex : 0;
-    userName         = s.userName      || '';
-    userCompany      = s.userCompany   || '';
+    signature        = s.signature    || '';
     emailSubject     = s.emailSubject  || 'Load Inquiry – {origin} → {destination}';
     emailTemplate    = s.emailTemplate || `Hi,
 
-This is {name} with {company}. Please tell me more about your load from {origin}, pickup on {date}, going to {destination}, posted on DAT today.
+Please tell me more about your load from {origin}, pickup on {date}, going to {destination}, posted on DAT today.
 
-Thanks,
-{name}
-{company}`;
+{signature}`;
 
     if (s.panelPopped) {
       chrome.runtime.sendMessage({ type: 'checkPanelWindow' }, (res) => {
@@ -2550,8 +2543,7 @@ Thanks,
         if ('dlmMpg' in changes)        dlmMpg        = +changes.dlmMpg.newValue        || 6.5;
         if ('dlmFuelPrice' in changes)  dlmFuelPrice  = +changes.dlmFuelPrice.newValue  || 3.89;
         if ('dlmDriverRate' in changes) dlmDriverRate = +changes.dlmDriverRate.newValue || 0;
-        if ('userName' in changes)    userName    = changes.userName.newValue    || '';
-        if ('userCompany' in changes) userCompany = changes.userCompany.newValue || '';
+        if ('signature' in changes)   signature   = changes.signature.newValue   || '';
         if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
         if ('emailTemplate' in changes)    emailTemplate    = changes.emailTemplate.newValue    || emailTemplate;
         if ('senderGmailIndex' in changes) senderGmailIndex = typeof changes.senderGmailIndex.newValue !== 'undefined' ? changes.senderGmailIndex.newValue : 0;
