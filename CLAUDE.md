@@ -32,9 +32,20 @@
 ---
 
 ## Current Version
-- Manifest: 1.29
-- Chrome Store target: v1.29 (not yet submitted)
+- Manifest: 1.30
+- Chrome Store target: v1.30 (not yet submitted)
 - Last submitted to store: v1.25 (May 26 2026)
+
+## Ship Checklist (do IN ORDER — prevents shipping a stale build)
+A stale v1.29 once shipped because code landed but the manifest was never
+bumped, so the corrected build couldn't be re-uploaded. Never again:
+1. Bump manifest "version" in new/dat-matcher/manifest.json BEFORE zipping
+2. Commit (and push) the bump + code
+3. Zip: `cd new/dat-matcher && zip -r ~/Desktop/laneiq-vX.YZ.zip . -x "*.DS_Store"`
+4. Verify INSIDE the zip — not just the folder:
+   - `unzip -p ~/Desktop/laneiq-vX.YZ.zip manifest.json | grep '"version"'` → matches intended
+   - `unzip -p ~/Desktop/laneiq-vX.YZ.zip content.js | grep -c "getMiles"` → >0 (a known-new code marker; swap for whatever's newest)
+5. Confirm the zipped version is STRICTLY GREATER than what's live on the Store (Store rejects equal/lower)
 
 ---
 
