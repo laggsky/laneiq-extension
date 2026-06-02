@@ -8,18 +8,21 @@
 
   // ── State ───────────────────────────────────────────────────────────────────
   let odIndex = null, oIndex = null, brokerIndex = null;
-  let senderEmail = '', emailSubject = '', emailTemplate = '', senderGmailIndex = 0;
+  let emailSubject = '', emailTemplate = '', senderGmailIndex = 0;
+  let gmailOAuthEmail = '';
+  let outlookOAuthEmail = '';
   let userName = '', userCompany = '';
   let gmailIndex = 0;
   let panel = null;
   let panelBodyHTML = '';
   let _clearPanelTimer;
   let isDragging = false, dragOffX = 0, dragOffY = 0;
-  let isResizing = false, resizeRightEdge = 0, resizeCorner = false;
+  let isResizing = false, resizeRightEdge = 0, resizeCorner = false, _resizeBottomOnly = false;
   let _dlmT;
   let _batchTimer = null;
   let _zeroRowStreak = 0;
   let _cityFailCount  = 0;
+  const _alertLastFired = {}; // alert type → timestamp ms; 60-min cooldown per type
   let _activeTab    = 'history';
   let lovedLoads    = {};   // loadKey → { record, savedAt }
   let _recPool      = {};   // loadKey → record, populated by renderRecs for heart click lookup
@@ -70,7 +73,7 @@
       rateClean = rateClean.replace(/,/g,'');
       const rate = isNaN(parseFloat(rateClean)) ? '' : String(parseFloat(rateClean));
       const broker = (row['Broker']||row['Broker company name']||'').trim();
-      const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), _f: fileIdx };
+      const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight / Pallets / FT']||row['Weight']||row['Wt']||row['WT']||row['Weight (lbs)']||row['Gross Weight']||row['GrossWeight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), _f: fileIdx };
       if (!origin || origin.length < 2) continue; count++;
       const no = normKey(origin), nd = normKey(dest);
       if (no && nd) { const k = no+'|'+nd; if (!odIdx[k]) odIdx[k]=[]; odIdx[k].push(record); }
@@ -103,23 +106,26 @@
 
   const DEFAULT_TEMPLATES = [
     { name: 'Standard',
-      subject: 'Available {origin} to {destination}',
-      body: 'Hi, I have a truck available from {origin} to {destination} on {date}. Please let me know if you have something. {name} - {company}' },
+      subject: 'Available {origin} to {destination} loading on {date}',
+      body: 'Hi, I have a truck available {miles} miles out from {origin} to {destination} on {date}. Please let me know if you have something. {name} - {company}' },
     { name: 'Follow Up',
-      subject: 'Following up - {origin} to {destination}',
+      subject: 'Following up - {origin} to {destination} loading on {date}',
       body: 'Hi, following up to see if you have any loads from {origin} to {destination}. {name} - {company}' },
     { name: 'Custom',
-      subject: '{origin} to {destination}',
+      subject: '{origin} to {destination} loading on {date}',
       body: 'Available from {origin} to {destination} on {date}. {name} - {company}' },
   ];
-  const _dbMatchCache = {};
+  let _dbMatchCache = {};
   let _lastClickedRow = null;
   let _lastExpandKey = '';
   let _lastExpandTime = 0;
+  let _panelSeq = 0; // incremented on each panel-populating call; stale fetches self-cancel
   // Memoization caches — keyed by raw input string, populated on first call
   const _normCache = new Map();
   const _dtCache   = new Map();
   let _initialized = false; // guard: don't re-read storage on edge-case re-init
+  let _initializing = false; // guard: prevent concurrent init() calls
+  let _observersSetup = false; // guard: one-time observers/listeners
   let panelPopped  = false; // true while the floating pop-out window is open
   let mapsApiKey   = '';    // Google Maps Distance Matrix API key
   let licenseTier  = 'solo';
@@ -209,6 +215,18 @@
       .replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
+  function normCity(str) {
+    if (!str) return str;
+    const abbr = {
+      'Cyn': 'Canyon', 'Jct': 'Junction', 'Spgs': 'Springs',
+      'Hts': 'Heights', 'Pk': 'Park', 'Ft': 'Fort',
+      'Mt': 'Mount', 'Vly': 'Valley', 'Crk': 'Creek',
+      'Lk': 'Lake', 'Rdg': 'Ridge', 'Grv': 'Grove',
+      'Brch': 'Branch', 'Mdws': 'Meadows'
+    };
+    return str.replace(/\b([A-Z][a-z]+)\b/g, (match) => abbr[match] || match);
+  }
+
   // ── Lookup functions ────────────────────────────────────────────────────────
   // Index keys are built by popup.js as normKey(origin)+'|'+normKey(dest),
   // preserving the state so "Columbia, MO" and "Columbia, PA" are separate
@@ -284,7 +302,7 @@ if (so && ro && so !== ro) return false;
   }
 
   function calcStats(recs) {
-    const rates = recs.map(r => parseFloat(String(r.rate||''))).filter(r => r > 0);
+    const rates = recs.map(r => parseFloat(String(r.rate||''))).filter(r => r > 0 && r <= 25000);
     return {
       count: recs.length,
       avg:  rates.length ? '$' + Math.round(rates.reduce((a,b)=>a+b,0)/rates.length).toLocaleString() : 'N/A',
@@ -360,7 +378,7 @@ if (so && ro && so !== ro) return false;
   }
 
   // ── Send email via Gmail compose URL ──────────────────────────────────────
-  async function sendEmail(brokerEmail, originRaw, destRaw, dateRaw = '') {
+  async function sendEmail(brokerEmail, originRaw, destRaw, dateRaw = '', milesRaw = '') {
     // Belt-and-suspenders: refresh name/company from storage if in-memory is empty.
     // Handles the edge case where the popup saved them just before this click.
     if (!userName || !userCompany) {
@@ -371,10 +389,17 @@ if (so && ro && so !== ro) return false;
     const origin  = cleanCity(originRaw);
     const dest    = cleanCity(destRaw);
     const tpl     = emailTemplates[activeTemplateIndex];
-    const subject = (tpl?.subject || emailSubject)
+    // {miles} = DH-O. When present, substitute the number. When empty, collapse
+    // the "{miles} miles out from" fragment to just "from" so the sentence reads
+    // cleanly (no double space, no dangling "miles out"); clear any stray tokens.
+    const fillMiles = (s) => milesRaw
+      ? s.replace(/\{miles\}/g, milesRaw)
+      : s.replace(/\{miles\}\s*miles out from/gi, 'from').replace(/\{miles\}/g, '');
+    const subject = fillMiles(tpl?.subject || emailSubject)
       .replace(/\{origin\}/g, origin)
-      .replace(/\{destination\}/g, dest);
-    const body    = (tpl?.body || emailTemplate)
+      .replace(/\{destination\}/g, dest)
+      .replace(/\{date\}/g, dateRaw);
+    const body    = fillMiles(tpl?.body || emailTemplate)
       .replace(/\{origin\}/g, origin)
       .replace(/\{destination\}/g, dest)
       .replace(/\{name\}/g, userName)
@@ -393,17 +418,38 @@ if (so && ro && so !== ro) return false;
       return false;
     }
 
-    const acct = senderGmailIndex;
-    const url  = `https://mail.google.com/mail/u/${acct}/?view=cm&fs=1` +
-                 `&to=${encodeURIComponent(brokerEmail)}` +
-                 `&su=${encodeURIComponent(subject)}` +
-                 `&body=${encodeURIComponent(body)}`;
-    const sent = await sendEmailViaGmail(brokerEmail, subject, body);
-    if (!sent) window.open(url, '_blank');
+    async function sendEmailViaOutlook(to, subj, bdy) {
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'sendOutlook', to, subject: subj, body: bdy,
+        });
+        if (result?.ok) return true;
+      } catch (e) {
+        // runtime error (e.g. background not ready) — fall through
+      }
+      return false;
+    }
+
+    // Send priority: connected Gmail OAuth → connected Outlook OAuth.
+    // Gated on which provider is connected so an Outlook-only user is never
+    // prompted with a Google login popup (and vice-versa). Returns true if the
+    // message was sent; false if no account is connected, so the caller can
+    // prompt the user to connect Gmail or Outlook.
+    let sent = false;
+    if (gmailOAuthEmail) {
+      sent = await sendEmailViaGmail(brokerEmail, subject, body);
+    } else if (outlookOAuthEmail) {
+      sent = await sendEmailViaOutlook(brokerEmail, subject, body);
+    }
+    return sent;
   }
 
   // ── Selector error reporting ────────────────────────────────────────────────
   async function reportSelectorError(type, detail) {
+    const COOLDOWN_MS = 60 * 60 * 1000; // 60 minutes per alert type
+    const now = Date.now();
+    if (_alertLastFired[type] && now - _alertLastFired[type] < COOLDOWN_MS) return;
+    _alertLastFired[type] = now;
     try {
       await fetch('https://laneiq-backend-production.up.railway.app/selector-error', {
         method: 'POST',
@@ -451,6 +497,22 @@ if (so && ro && so !== ro) return false;
     }, 2000);
   }
 
+  // Brief floating message anchored to a chip when no send method is configured.
+  function showSetupMsg(anchorEl) {
+    document.querySelector('.dlm-setup-msg')?.remove();
+    const tip = document.createElement('div');
+    tip.className = 'dlm-setup-msg';
+    tip.textContent = 'Connect Gmail or Outlook first';
+    tip.style.cssText = 'position:fixed;z-index:2147483647;background:#1d1d1f;color:#fff;' +
+      'font:600 11px/1.35 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;' +
+      'max-width:230px;box-shadow:0 4px 14px rgba(0,0,0,.25)';
+    const r = anchorEl.getBoundingClientRect();
+    tip.style.top  = (r.bottom + 5) + 'px';
+    tip.style.left = Math.max(8, r.left) + 'px';
+    document.body.appendChild(tip);
+    setTimeout(() => tip.remove(), 3500);
+  }
+
   // ── RPM result tooltip ────────────────────────────────────────────────────
   function showRpmTip(anchorEl, { miles, rpm, dho }) {
     const old = document.querySelector('.dlm-rpm-tip');
@@ -469,6 +531,78 @@ if (so && ro && so !== ro) return false;
     setTimeout(() => document.addEventListener('click', dismiss, true), 0);
   }
 
+  function openNotePopover(badge) {
+    document.querySelector('.dlm-note-popover')?.remove();
+    const noteKey = badge.dataset.noteKey;
+    const panel = document.getElementById('dlm-panel');
+    if (!panel) return;
+    const popover = document.createElement('div');
+    popover.className = 'dlm-note-popover';
+    popover.innerHTML =
+      '<div class="dlm-note-hdr">' +
+        '<span class="dlm-note-title">NOTE</span>' +
+        '<button class="dlm-note-close">✕</button>' +
+      '</div>' +
+      '<textarea class="dlm-note-ta" placeholder="Add your note…"></textarea>' +
+      '<div class="dlm-note-saved" style="display:none">Saved</div>';
+    panel.appendChild(popover);
+    const br = badge.getBoundingClientRect();
+    const pr = panel.getBoundingClientRect();
+    popover.style.top  = Math.max(0, br.top - pr.top - 8) + 'px';
+    popover.style.left = Math.max(0, br.left - pr.left - 218) + 'px';
+    let onOutsideClick;
+    setTimeout(() => {
+      onOutsideClick = e => {
+        if (!popover.contains(e.target) && !badge.contains(e.target)) {
+          popover.remove();
+          document.removeEventListener('click', onOutsideClick, true);
+        }
+      };
+      document.addEventListener('click', onOutsideClick, true);
+    }, 0);
+    chrome.storage.local.get([noteKey], res => {
+      popover.querySelector('.dlm-note-ta').value = res[noteKey] || '';
+    });
+    popover.querySelector('.dlm-note-close').addEventListener('click', () => {
+      popover.remove();
+      document.removeEventListener('click', onOutsideClick, true);
+    });
+    let _saveTimer = null;
+    const savedEl = popover.querySelector('.dlm-note-saved');
+    popover.querySelector('.dlm-note-ta').addEventListener('input', e => {
+      const text = e.target.value;
+      badge.classList.toggle('dlm-note-has', !!text.trim());
+      clearTimeout(_saveTimer);
+      _saveTimer = setTimeout(() => {
+        chrome.storage.local.set({ [noteKey]: text }, () => {
+          savedEl.style.display = 'block';
+          setTimeout(() => { savedEl.style.display = 'none'; }, 1500);
+        });
+      }, 300);
+    });
+  }
+
+  function showUndoToast(key, savedEntry) {
+    document.querySelector('.dlm-undo-toast')?.remove();
+    const panel = document.getElementById('dlm-panel');
+    if (!panel) return;
+    const toast = document.createElement('div');
+    toast.className = 'dlm-undo-toast';
+    toast.innerHTML = 'Load removed — <button class="dlm-undo-btn">Undo</button>';
+    panel.appendChild(toast);
+    const timer = setTimeout(() => {
+      toast.remove();
+      chrome.storage.local.remove('note_' + key);
+    }, 5000);
+    toast.querySelector('.dlm-undo-btn').addEventListener('click', () => {
+      clearTimeout(timer);
+      toast.remove();
+      lovedLoads[key] = savedEntry;
+      chrome.storage.local.set({ lovedLoads });
+      if (_activeTab === 'loved') switchTab('loved');
+    });
+  }
+
   // ── Extract rate number from DAT row ──────────────────────────────────────
   function getRate(row) {
     const el = row.querySelector('[class*="rate"],[class*="Rate"],[class*="price"],[class*="Price"]');
@@ -484,6 +618,19 @@ if (so && ro && so !== ro) return false;
   function getDHO(row) {
     const m = row.textContent.match(/\bDH[\s\-O]*:?\s*(\d+)\b/i);
     return m ? parseInt(m[1]) : null;
+  }
+
+  // ── Extract DH-O miles for the {miles} template variable ──────────────────
+  // DH-O has its own cell, parenthesized like "(191)". A hidden duplicate
+  // deadhead row can exist (display:none), so scan all matches and return the
+  // first with actual digits. Returns just the number string, or '' if none.
+  function getMiles(row) {
+    const cells = row.querySelectorAll('[data-test="load-dho-cell"], .deadhead');
+    for (const cell of cells) {
+      const m = (cell.textContent || '').match(/\d+/);
+      if (m) return m[0];
+    }
+    return '';
   }
 
   // ── Style the broker's email address as a tappable chip ───────────────────
@@ -505,11 +652,13 @@ if (so && ro && so !== ro) return false;
     const chipDest   = row.dataset.dlmDest   || cityMatches[1] || dest;
     const dateMatch  = rowText.match(/\b(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/);
     const chipDate   = dateMatch ? dateMatch[1] : '';
+    const chipMiles  = getMiles(row);
 
-    const onClick = e => {
+    const onClick = async e => {
       e.stopPropagation(); e.preventDefault();
-      sendEmail(email, e.currentTarget.dataset.emailOrigin || '', e.currentTarget.dataset.emailDest || '', e.currentTarget.dataset.emailDate || '');
-      flashChipSent(e.currentTarget);
+      const chip = e.currentTarget;
+      const ok = await sendEmail(email, chip.dataset.emailOrigin || '', chip.dataset.emailDest || '', chip.dataset.emailDate || '', chip.dataset.emailMiles || '');
+      if (ok) flashChipSent(chip); else showSetupMsg(chip);
     };
 
     // ── Case 1: email is already in a mailto anchor — style it directly ───────
@@ -521,6 +670,7 @@ if (so && ro && so !== ro) return false;
         a.dataset.emailOrigin = chipOrigin;
         a.dataset.emailDest   = chipDest;
         a.dataset.emailDate   = chipDate;
+        a.dataset.emailMiles  = chipMiles;
         a.classList.add('dlm-email-chip');
         a.title = `Click to email ${email}`;
         a.addEventListener('click', onClick, true);
@@ -544,6 +694,7 @@ if (so && ro && so !== ro) return false;
         parent.dataset.emailOrigin = chipOrigin;
         parent.dataset.emailDest   = chipDest;
         parent.dataset.emailDate   = chipDate;
+        parent.dataset.emailMiles  = chipMiles;
         parent.classList.add('dlm-email-chip');
         parent.title = `Click to email ${email}`;
         parent.addEventListener('click', onClick, true);
@@ -559,6 +710,7 @@ if (so && ro && so !== ro) return false;
       chip.dataset.emailOrigin = chipOrigin;
       chip.dataset.emailDest   = chipDest;
       chip.dataset.emailDate   = chipDate;
+      chip.dataset.emailMiles  = chipMiles;
       chip.textContent = email;
       chip.title = `Click to email ${email}`;
       chip.addEventListener('click', onClick, true);
@@ -574,8 +726,8 @@ if (so && ro && so !== ro) return false;
     // ── Extract origin/destination from DAT row ─────────────────────────────────
   function getCities(row) {
     // Primary: confirmed selectors from HTML inspector
-    const oEl = row.querySelector('div[class="origin"], [class*="origin"] .truncate, [class*="origin"]');
-    const dEl = row.querySelector('div[class="destination"], [class*="destination"] .truncate, [class*="destination"]');
+    const oEl = row.querySelector('[class*="origin"] .truncate, [class*="origin"]');
+    const dEl = row.querySelector('[class*="destination"] .truncate, [class*="destination"]');
 
     let origin = oEl ? oEl.textContent.trim() : '';
     let dest   = dEl ? dEl.textContent.trim() : '';
@@ -651,7 +803,7 @@ if (so && ro && so !== ro) return false;
         if (cached.matchType === 'origin') {
           row.classList.add('dlm-blue');
         } else {
-          row.classList.add(cached.loadCount >= 5 ? 'dlm-green' : 'dlm-yellow');
+          row.classList.add(cached.loadCount >= 3 ? 'dlm-green' : 'dlm-yellow');
         }
       }
       if (!useCSV) return;
@@ -744,10 +896,13 @@ if (so && ro && so !== ro) return false;
       for (const r of recs) {
         const key = r.loadNum || (r.origin + r.puDate);
         if (seen.has(key)) continue;
-        if ((r.origin      || '').toLowerCase().includes(q) ||
-            (r.destination || '').toLowerCase().includes(q) ||
-            (r.broker      || '').toLowerCase().includes(q) ||
-            (r.loadNum     || '').toLowerCase().includes(q)) {
+        if ((r.origin          || '').toLowerCase().includes(q) ||
+            (r.destination     || '').toLowerCase().includes(q) ||
+            (r.broker          || '').toLowerCase().includes(q) ||
+            (r.loadNum         || '').toLowerCase().includes(q) ||
+            (r.pickupCompany   || '').toLowerCase().includes(q) ||
+            (r.deliveryCompany || '').toLowerCase().includes(q) ||
+            (r.commodity       || '').toLowerCase().includes(q)) {
           seen.add(key);
           results.push(r);
         }
@@ -780,6 +935,7 @@ if (so && ro && so !== ro) return false;
   function showSearchResults(query) {
     const q = query.trim();
     const body = document.getElementById('dlm-body');
+    if (!body) return;
 
     // Load number mode: full-index lookup, distinct label
     if (isLoadNumQuery(q)) {
@@ -841,6 +997,7 @@ if (so && ro && so !== ro) return false;
 
   // ── Panel ───────────────────────────────────────────────────────────────────
   function renderTemplatesBody(bodyEl) {
+    if (!bodyEl) return;
     const infoCard = `
       <div style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;border:2px solid #e5e5ea;box-shadow:0 1px 4px rgba(0,0,0,.06)">
         <div style="font-size:11px;font-weight:700;color:#1d1d1f;letter-spacing:.01em;margin-bottom:10px">Your Info</div>
@@ -858,22 +1015,22 @@ if (so && ro && so !== ro) return false;
     const sendFromCard = `
       <div style="background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;border:2px solid #e5e5ea;box-shadow:0 1px 4px rgba(0,0,0,.06)">
         <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Send From — Outbound Email</div>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <input id="dlm-send-input" type="text" value="${esc(senderEmail)}" placeholder="Paste Gmail URL or your@gmail.com"
-                 style="flex:1;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;min-width:0;box-sizing:border-box">
-          <button class="dlm-send-save"
-                  style="padding:7px 12px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap">Save</button>
-        </div>
-        <div id="dlm-send-accts" style="display:flex;gap:4px;margin-bottom:8px">
-          ${[0,1,2,3,4].map(n => `<button class="dlm-send-acct" data-send-idx="${n}"
-              style="flex:1;padding:5px 0;border:none;border-radius:6px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer;
-                     background:${n === senderGmailIndex ? '#0058e0' : 'rgba(0,0,0,.06)'};
-                     color:${n === senderGmailIndex ? '#fff' : '#6e6e73'}">${n}</button>`).join('')}
-        </div>
-        <div style="font-size:10px;color:#aeaeb2;line-height:1.4;margin-bottom:6px">Open your outbound Gmail → check URL for account number</div>
-        <div id="dlm-send-status" style="font-size:11px;font-weight:500;color:${senderEmail ? '#34c759' : '#aeaeb2'}">
-          ${senderEmail ? `✓ ${esc(senderEmail)}` : 'Not set'}
-        </div>
+        <div style="font-size:10px;color:#aeaeb2;margin-bottom:10px">Used for one-click email sending to brokers</div>
+        ${gmailOAuthEmail
+          ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+               <span style="font-size:12px;font-weight:600;color:#34c759">✅ ${esc(gmailOAuthEmail)}</span>
+               <button class="dlm-gmail-disconnect" style="padding:6px 12px;background:#ff3b30;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap">Disconnect</button>
+             </div>`
+          : outlookOAuthEmail
+          ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+               <span style="font-size:12px;font-weight:600;color:#34c759">✅ ${esc(outlookOAuthEmail)}</span>
+               <button class="dlm-outlook-disconnect" style="padding:6px 12px;background:#ff3b30;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap">Disconnect</button>
+             </div>`
+          : `<div>
+               <button class="dlm-gmail-connect" style="width:100%;padding:8px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:8px">Connect Gmail</button>
+               <button class="dlm-outlook-connect" style="width:100%;padding:8px;background:#0f6cbd;color:#fff;border:none;border-radius:8px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:0">Connect Outlook</button>
+             </div>`
+        }
       </div>`;
     const tmpls = emailTemplates.length ? emailTemplates : DEFAULT_TEMPLATES;
     bodyEl.innerHTML = sendFromCard + infoCard + tmpls.map((t, i) => {
@@ -897,10 +1054,20 @@ if (so && ro && so !== ro) return false;
                     style="margin-bottom:8px">${esc(t.subject)}</textarea>
           <div style="font-size:10px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">Body</div>
           <textarea class="dlm-tpl-area dlm-tpl-body" data-tpl-index="${i}" rows="4">${esc(t.body)}</textarea>
+          <div style="display:flex;gap:8px;margin-top:8px;justify-content:flex-end">
+            <button class="dlm-tpl-reset" data-tpl-index="${i}"
+              style="padding:6px 12px;background:rgba(0,0,0,.06);color:#6e6e73;border:none;border-radius:8px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer">
+              Reset
+            </button>
+            <button class="dlm-tpl-save" data-tpl-index="${i}"
+              style="padding:6px 14px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer">
+              Save
+            </button>
+          </div>
         </div>`;
     }).join('') +
     `<div style="padding:4px 2px 8px;font-size:10px;color:#aeaeb2;line-height:1.5">
-       Variables: {origin} · {destination} · {name} · {company} · {date}
+       Variables: {origin} · {destination} · {name} · {company} · {date} · {miles}
      </div>`;
   }
 
@@ -953,6 +1120,11 @@ if (so && ro && so !== ro) return false;
         <div id="dlm-setup-ds-status" style="font-size:11px;color:#aeaeb2;margin-top:8px">
           ${useCSV && useDB ? 'Both sources active' : useCSV ? 'My CSV active' : useDB ? 'LaneIQ Database active' : 'No data source selected'}
         </div>
+      </div>
+
+      <div style="display:flex;align-items:flex-start;gap:8px;background:#e8f4ff;border:1px solid #99caff;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#3a3a3a;line-height:1.45;">
+        <span style="font-size:14px;margin-top:1px;">🔒</span>
+        <span style="font-weight:500;">Your load data stays in your browser. Only <strong>YOU</strong> can see it or manage it.</span>
       </div>
 
       <div style="${CARD}">
@@ -1076,10 +1248,13 @@ if (so && ro && so !== ro) return false;
     const filtered = Object.values(lovedLoads)
       .map(e => e.record)
       .filter(r =>
-        (r.origin      || '').toLowerCase().includes(lq) ||
-        (r.destination || '').toLowerCase().includes(lq) ||
-        (r.broker      || '').toLowerCase().includes(lq) ||
-        String(r.loadNum || '').toLowerCase().includes(lq)
+        (r.origin          || '').toLowerCase().includes(lq) ||
+        (r.destination     || '').toLowerCase().includes(lq) ||
+        (r.broker          || '').toLowerCase().includes(lq) ||
+        String(r.loadNum   || '').toLowerCase().includes(lq) ||
+        (r.pickupCompany   || '').toLowerCase().includes(lq) ||
+        (r.deliveryCompany || '').toLowerCase().includes(lq) ||
+        (r.commodity       || '').toLowerCase().includes(lq)
       );
     if (!filtered.length) {
       bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No preferred loads match<br><strong style="color:#6e6e73;font-weight:600">${esc(q)}</strong></div>`;
@@ -1088,6 +1263,17 @@ if (so && ro && so !== ro) return false;
     bodyEl.innerHTML =
       '<div class="dlm-stitle">Matching Preferred · ' + filtered.length + '</div>' +
       renderRecs(filtered, '#e05c5c', 999, true, true, new Set(Object.keys(lovedLoads)));
+    refreshNoteBadges(bodyEl);
+  }
+
+  async function refreshNoteBadges(container) {
+    const badges = Array.from((container || document).querySelectorAll('.dlm-note-badge'));
+    if (!badges.length) return;
+    const keys = badges.map(b => b.dataset.noteKey);
+    const stored = await chrome.storage.local.get(keys);
+    badges.forEach(b => {
+      b.classList.toggle('dlm-note-has', !!(stored[b.dataset.noteKey] || '').trim());
+    });
   }
 
   function countOrigins() {
@@ -1137,18 +1323,27 @@ if (so && ro && so !== ro) return false;
 
   function switchTab(name) {
     _activeTab = name;
-    if (name !== 'regions') { clearInterval(_regionsTimer); _regionsTimer = null; }
+    clearInterval(_regionsTimer); _regionsTimer = null;
     document.querySelectorAll('#dlm-panel .dlm-tab').forEach(t =>
       t.classList.toggle('dlm-tab-active', t.dataset.tab === name)
     );
+    const _tabLabels = { history: 'Load History', loved: 'Preferred', regions: 'Hot Regions', templates: 'Templates', setup: 'Setup', notes: 'Notes' };
+    const titleEl = document.getElementById('dlm-title');
+    if (titleEl && name !== 'history') titleEl.innerHTML = '◈ ' + (_tabLabels[name] || name) + '<small> · drag to move</small>';
+    if (titleEl && name === 'history') titleEl.innerHTML = '◈ Load History<small> · drag to move</small>';
     const searchWrap = document.getElementById('dlm-search-wrap');
     const bodyEl     = document.getElementById('dlm-body');
     if (!bodyEl) return;
+    bodyEl.style.padding = '';
+    bodyEl.style.background = '';
+    bodyEl.style.overflow = '';
+    bodyEl.style.display = '';
+    bodyEl.style.flexDirection = '';
 
     if (name === 'history') {
       if (searchWrap) searchWrap.style.display = '';
       const searchEl = document.getElementById('dlm-search');
-      if (searchEl) searchEl.placeholder = 'Search origin, destination, broker, load #…';
+      if (searchEl) searchEl.placeholder = 'Search origin, destination, broker, shipper, receiver, commodity, load #…';
       bodyEl.innerHTML = panelBodyHTML ||
         '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Click a highlighted row<br>to see booking history</div>';
       bodyEl.scrollTop = 0;
@@ -1167,6 +1362,7 @@ if (so && ro && so !== ro) return false;
           renderRecs(recs, '#e05c5c', 999, true, true, new Set(Object.keys(lovedLoads)))
         : '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Tap ♡ on any load<br>to mark it as preferred</div>';
       bodyEl.scrollTop = 0;
+      if (recs.length) refreshNoteBadges(bodyEl);
     } else if (name === 'templates') {
       if (searchWrap) searchWrap.style.display = 'none';
       renderTemplatesBody(bodyEl);
@@ -1182,6 +1378,39 @@ if (so && ro && so !== ro) return false;
         const el = document.getElementById('dlm-body');
         if (el && _activeTab === 'regions') renderRegionsBody(el);
       }, 1000);
+    } else if (name === 'notes') {
+      if (searchWrap) searchWrap.style.display = 'none';
+      bodyEl.style.padding = '0';
+      bodyEl.style.background = '#fef3c7';
+      bodyEl.style.overflow = 'hidden';
+      bodyEl.style.display = 'flex';
+      bodyEl.style.flexDirection = 'column';
+      const panelEl = document.getElementById('dlm-panel');
+      const panelHeight = panelEl ? panelEl.offsetHeight : 500;
+      chrome.storage.local.get(['dlm-global-notes'], res => {
+        const saved = res['dlm-global-notes'] || '';
+        bodyEl.innerHTML =
+          '<textarea id="dlm-notes-ta" placeholder="Write anything — follow-ups, reminders, to-dos..." ' +
+            'style="height:' + (panelHeight - 80) + 'px;min-height:' + (panelHeight - 80) + 'px;width:100%;border:none;background:#fef3c7;padding:14px 16px;font-size:13px;' +
+            'font-family:-apple-system,BlinkMacSystemFont,\'SF Pro Text\',system-ui,sans-serif;' +
+            'color:#1d1d1f;resize:none;outline:none;box-sizing:border-box;line-height:1.6">' +
+          esc(saved) +
+          '</textarea>' +
+          '<div id="dlm-notes-saved" style="display:none;position:absolute;bottom:10px;right:14px;' +
+            'font-size:10px;font-weight:600;color:#92400e;letter-spacing:.02em">Saved</div>';
+        const ta = bodyEl.querySelector('#dlm-notes-ta');
+        let _notesTimer = null;
+        const savedEl = bodyEl.querySelector('#dlm-notes-saved');
+        if (!ta) return;
+        ta.addEventListener('input', () => {
+          clearTimeout(_notesTimer);
+          _notesTimer = setTimeout(() => {
+            chrome.storage.local.set({ 'dlm-global-notes': ta.value }, () => {
+              if (savedEl) { savedEl.style.display = 'block'; setTimeout(() => { savedEl.style.display = 'none'; }, 1500); }
+            });
+          }, 300);
+        });
+      });
     }
   }
 
@@ -1205,11 +1434,12 @@ if (so && ro && so !== ro) return false;
           <button class="dlm-tab" data-tab="regions">Hot Regions</button>
           <button class="dlm-tab" data-tab="templates">Templates</button>
           <button class="dlm-tab" data-tab="setup">Setup</button>
+          <button class="dlm-tab" data-tab="notes">Notes</button>
         </div>
         <div id="dlm-content">
           <div id="dlm-search-wrap">
             <span style="color:#4b5563;font-size:13px;flex-shrink:0;line-height:1">⌕</span>
-            <input id="dlm-search" type="text" placeholder="Search origin, destination, broker, load #…" autocomplete="off" spellcheck="false">
+            <input id="dlm-search" type="text" placeholder="Search origin, destination, broker, shipper, receiver, commodity, load #…" autocomplete="off" spellcheck="false">
             <button id="dlm-search-clear" title="Clear search">✕</button>
           </div>
           <div id="dlm-body">
@@ -1219,6 +1449,7 @@ if (so && ro && so !== ro) return false;
           </div>
         </div>
       </div>
+      <div id="dlm-bottom"></div>
       <div id="dlm-corner"></div>`;
     document.body.appendChild(d);
 
@@ -1303,6 +1534,14 @@ if (so && ro && so !== ro) return false;
 
     d.querySelector('#dlm-resize').addEventListener('mousedown',  e => startResize(e, false));
     d.querySelector('#dlm-corner').addEventListener('mousedown',  e => startResize(e, true));
+    d.querySelector('#dlm-bottom').addEventListener('mousedown',  e => {
+      isResizing = true;
+      resizeCorner = false;
+      _resizeBottomOnly = true;
+      d.classList.add('dlm-resizing');
+      e.preventDefault();
+      e.stopPropagation();
+    });
 
     document.addEventListener('mousemove', e => {
       if (isDragging) {
@@ -1311,19 +1550,29 @@ if (so && ro && so !== ro) return false;
         d.style.right = 'auto';
       }
       if (isResizing) {
-        const newWidth = Math.max(450, Math.min(650, resizeRightEdge - e.clientX));
-        d.style.width = newWidth + 'px';
-        d.style.left  = (resizeRightEdge - newWidth) + 'px';
-        if (resizeCorner) {
+        if (!_resizeBottomOnly) {
+          const newWidth = Math.max(450, Math.min(650, resizeRightEdge - e.clientX));
+          d.style.width = newWidth + 'px';
+          d.style.left  = (resizeRightEdge - newWidth) + 'px';
+        }
+        if (resizeCorner || _resizeBottomOnly) {
           const top = d.getBoundingClientRect().top;
-          d.style.maxHeight = Math.max(150, Math.min(window.innerHeight - top - 10, e.clientY - top)) + 'px';
+          d.style.height = Math.max(150, Math.min(window.innerHeight - top - 10, e.clientY - top)) + 'px';
         }
       }
     });
 
     document.addEventListener('mouseup', () => {
       isDragging = false;
-      if (isResizing) { isResizing = false; resizeCorner = false; d.classList.remove('dlm-resizing'); }
+      if (isResizing) {
+        if ((resizeCorner || _resizeBottomOnly) && d.style.height) {
+          chrome.storage.local.set({ 'dlm-panel-height': d.style.height });
+        }
+        isResizing = false;
+        resizeCorner = false;
+        _resizeBottomOnly = false;
+        d.classList.remove('dlm-resizing');
+      }
     });
 
     // Tab clicks
@@ -1339,17 +1588,29 @@ if (so && ro && so !== ro) return false;
       const key = btn.dataset.loadKey;
       if (!key) return;
       if (lovedLoads[key]) {
+        const savedEntry = lovedLoads[key];
         delete lovedLoads[key];
         btn.classList.remove('dlm-loved');
         btn.title = 'Save to Preferred';
+        chrome.storage.local.set({ lovedLoads });
+        if (_activeTab === 'loved') switchTab('loved');
+        showUndoToast(key, savedEntry);
       } else {
         const rec = _recPool[key];
         if (rec) lovedLoads[key] = { record: rec, savedAt: Date.now() };
         btn.classList.add('dlm-loved');
         btn.title = 'Remove from Preferred';
+        chrome.storage.local.set({ lovedLoads });
+        if (_activeTab === 'loved') switchTab('loved');
       }
-      chrome.storage.local.set({ lovedLoads });
-      if (_activeTab === 'loved') switchTab('loved');
+    });
+
+    // Note badge delegation — opens sticky note popover
+    d.querySelector('#dlm-body').addEventListener('click', e => {
+      const badge = e.target.closest('.dlm-note-badge');
+      if (!badge) return;
+      e.stopPropagation();
+      openNotePopover(badge);
     });
 
     // Templates delegation — Your Info save + Send From + Use This button + textarea auto-save
@@ -1367,43 +1628,52 @@ if (so && ro && so !== ro) return false;
         setTimeout(() => { btn.textContent = orig; btn.style.background = '#0058e0'; }, 1500);
         return;
       }
-      if (e.target.closest('.dlm-send-save')) {
-        const raw = document.getElementById('dlm-send-input')?.value.trim() || '';
-        const urlMatch = raw.match(/mail\.google\.com\/mail\/u\/(\d+)/);
-        const btn = e.target.closest('.dlm-send-save');
-        if (urlMatch) {
-          senderGmailIndex = parseInt(urlMatch[1]);
-          senderEmail = `Account #${senderGmailIndex}`;
-        } else if (raw && raw.includes('@')) {
-          senderEmail = raw;
-        } else {
-          const statusEl = document.getElementById('dlm-send-status');
-          if (statusEl) { statusEl.textContent = 'Enter a valid email or Gmail URL'; statusEl.style.color = '#ff3b30'; }
-          return;
-        }
-        chrome.storage.local.set({ senderEmail, senderGmailIndex });
-        renderTemplatesBody(e.currentTarget);
-        btn.textContent = 'Saved ✓';
-        btn.style.background = '#34c759';
-        setTimeout(() => { btn.textContent = 'Save'; btn.style.background = '#0058e0'; }, 1500);
+      if (e.target.classList.contains('dlm-gmail-connect')) {
+        const connectBodyEl = document.getElementById('dlm-body');
+        chrome.runtime.sendMessage({ type: 'gmailConnect' }, (res) => {
+          if (res?.ok && res.email) {
+            gmailOAuthEmail = res.email;
+            chrome.storage.local.set({ gmailOAuthEmail: res.email });
+            renderTemplatesBody(connectBodyEl);
+          } else {
+            console.warn('[LaneIQ] Gmail connect failed:', res?.error);
+          }
+        });
         return;
       }
-      if (e.target.closest('.dlm-send-acct')) {
-        const acctBtn = e.target.closest('.dlm-send-acct');
-        senderGmailIndex = parseInt(acctBtn.dataset.sendIdx, 10);
-        if (senderEmail.startsWith('Account #')) senderEmail = `Account #${senderGmailIndex}`;
-        chrome.storage.local.set({ senderGmailIndex, senderEmail });
-        const acctBtns = document.getElementById('dlm-send-accts');
-        if (acctBtns) acctBtns.querySelectorAll('.dlm-send-acct').forEach(b => {
-          const active = parseInt(b.dataset.sendIdx) === senderGmailIndex;
-          b.style.background = active ? '#0058e0' : 'rgba(0,0,0,.06)';
-          b.style.color      = active ? '#fff'     : '#6e6e73';
+      if (e.target.classList.contains('dlm-gmail-disconnect')) {
+        const disconnectBodyEl = document.getElementById('dlm-body');
+        chrome.runtime.sendMessage({ type: 'gmailDisconnect' }, (res) => {
+          if (res?.ok) {
+            gmailOAuthEmail = '';
+            chrome.storage.local.remove(['gmailOAuthEmail']);
+            renderTemplatesBody(disconnectBodyEl);
+          }
         });
-        const statusEl = document.getElementById('dlm-send-status');
-        if (statusEl && senderEmail) {
-          statusEl.textContent = `✓ ${senderEmail}`;
-          statusEl.style.color = '#34c759';
-        }
+        return;
+      }
+      if (e.target.classList.contains('dlm-outlook-connect')) {
+        const connectBodyEl = document.getElementById('dlm-body');
+        chrome.runtime.sendMessage({ type: 'outlookConnect' }, (res) => {
+          if (res?.ok && res.email) {
+            outlookOAuthEmail = res.email;
+            chrome.storage.local.set({ outlookOAuthEmail: res.email });
+            renderTemplatesBody(connectBodyEl);
+          } else {
+            console.warn('[LaneIQ] Outlook connect failed:', res?.error);
+          }
+        });
+        return;
+      }
+      if (e.target.classList.contains('dlm-outlook-disconnect')) {
+        const disconnectBodyEl = document.getElementById('dlm-body');
+        chrome.runtime.sendMessage({ type: 'outlookDisconnect' }, (res) => {
+          if (res?.ok) {
+            outlookOAuthEmail = '';
+            chrome.storage.local.remove(['outlookOAuthEmail']);
+            renderTemplatesBody(disconnectBodyEl);
+          }
+        });
         return;
       }
       if (e.target.closest('.dlm-setup-file-remove')) {
@@ -1451,10 +1721,58 @@ if (so && ro && so !== ro) return false;
         if (st) { st.textContent = `✓ ${gmailEmail || 'Account #'+gmailIndex} · Account #${gmailIndex}`; st.style.color = '#34c759'; }
         return;
       }
+      const saveBtn = e.target.closest('.dlm-tpl-save');
+      if (saveBtn) {
+        const idx = parseInt(saveBtn.dataset.tplIndex, 10);
+        const card = saveBtn.closest('.dlm-tpl-card');
+        const subjectArea = card?.querySelector('.dlm-tpl-subject');
+        const bodyArea = card?.querySelector('.dlm-tpl-body');
+        const tmpls = emailTemplates.length ? emailTemplates : DEFAULT_TEMPLATES.map(t => ({...t}));
+        if (!tmpls[idx]) return;
+        if (subjectArea) tmpls[idx].subject = subjectArea.value;
+        if (bodyArea) tmpls[idx].body = bodyArea.value;
+        emailTemplates = tmpls;
+        chrome.storage.local.set({ emailTemplates: tmpls });
+        saveBtn.textContent = 'Saved ✓';
+        saveBtn.style.background = '#34c759';
+        setTimeout(() => { saveBtn.textContent = 'Save'; saveBtn.style.background = '#0058e0'; }, 1500);
+        return;
+      }
+      const resetBtn = e.target.closest('.dlm-tpl-reset');
+      if (resetBtn) {
+        const idx = parseInt(resetBtn.dataset.tplIndex, 10);
+        const card = resetBtn.closest('.dlm-tpl-card');
+        const def = DEFAULT_TEMPLATES[idx];
+        if (!def) return;
+        const subjectArea = card?.querySelector('.dlm-tpl-subject');
+        const bodyArea = card?.querySelector('.dlm-tpl-body');
+        if (subjectArea) subjectArea.value = def.subject;
+        if (bodyArea) bodyArea.value = def.body;
+        const tmpls = emailTemplates.length ? emailTemplates : DEFAULT_TEMPLATES.map(t => ({...t}));
+        if (!tmpls[idx]) return;
+        tmpls[idx].subject = def.subject;
+        tmpls[idx].body = def.body;
+        emailTemplates = tmpls;
+        chrome.storage.local.set({ emailTemplates: tmpls });
+        return;
+      }
       const useBtn = e.target.closest('.dlm-tpl-use');
       if (!useBtn) return;
       const idx = parseInt(useBtn.dataset.tplIndex, 10);
       if (isNaN(idx) || idx === activeTemplateIndex) return;
+      const activeBody = document.getElementById('dlm-body');
+      if (activeBody) {
+        activeBody.querySelectorAll('.dlm-tpl-area').forEach(area => {
+          const aIdx = parseInt(area.dataset.tplIndex, 10);
+          if (isNaN(aIdx)) return;
+          const tmpls = emailTemplates.length ? emailTemplates : DEFAULT_TEMPLATES.map(t => ({...t}));
+          if (!tmpls[aIdx]) return;
+          if (area.classList.contains('dlm-tpl-subject')) tmpls[aIdx].subject = area.value;
+          if (area.classList.contains('dlm-tpl-body'))    tmpls[aIdx].body    = area.value;
+          emailTemplates = tmpls;
+          chrome.storage.local.set({ emailTemplates: tmpls });
+        });
+      }
       activeTemplateIndex = idx;
       chrome.storage.local.set({ activeTemplate: idx });
       renderTemplatesBody(e.currentTarget);
@@ -1481,9 +1799,17 @@ if (so && ro && so !== ro) return false;
     if (!panel) return;
     const bodyEl = document.getElementById('dlm-body');
     if (bodyEl) bodyEl.innerHTML = '';
-    const titleEl = panel.querySelector('#dlm-title');
-    if (titleEl) titleEl.innerHTML = '◈ LaneIQ<small> · drag</small>';
     if (!panelPopped) panel.style.display = 'none';
+  }
+
+  function showEmptyPanel(origin, dest) {
+    if (!panel) panel = buildPanel();
+    if (!panelPopped) panel.style.display = 'flex';
+    switchTab('history');
+    const html = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No matching records for this lane</div>`;
+    panelBodyHTML = html;
+    const bodyEl = document.getElementById('dlm-body');
+    if (bodyEl) { bodyEl.innerHTML = html; bodyEl.scrollTop = 0; }
   }
 
   function showPanel(origin, dest, odM, oM, bM, datBroker) {
@@ -1495,13 +1821,6 @@ if (so && ro && so !== ro) return false;
     if (!panelPopped) panel.style.display = 'flex';
     switchTab('history');
 
-    const titleEl = panel.querySelector('#dlm-title');
-    if (titleEl) {
-      const laneShort = dest
-        ? `${origin.split(',')[0].trim()} → ${dest.split(',')[0].trim()}`
-        : origin.split(',')[0].trim();
-      titleEl.innerHTML = `◈ ${esc(laneShort)}<small> · drag</small>`;
-    }
     const pri = odM.length ? odM : oM.length ? oM : bM;
     const st = calcStats(pri);
     const arrow = dest ? `<span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(dest)}` : '';
@@ -1523,7 +1842,7 @@ if (so && ro && so !== ro) return false;
       // stagger delay. The .dlm-rec CSS animation still runs (opacity 0→1) but fires
       // immediately for every record, so the panel is never empty on first open.
       html += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-              renderRecs(odM, '#34c759', 20, true, true, lk);
+              renderRecs(odM, odM.length >= 3 ? '#34c759' : '#f5a623', 20, true, true, lk, datBroker);
     }
 
     // Purple: same lane + same broker
@@ -1534,10 +1853,10 @@ if (so && ro && so !== ro) return false;
 
     // Blue: same origin city only
     if (!odM.length && oM.length) {
-      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lk);
+      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lk, datBroker);
     } else if (odM.length && oM.length) {
       const originOnly = oM.filter(r => !odM.find(o => o.loadNum === r.loadNum));
-      if (originOnly.length) html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lk);
+      if (originOnly.length) html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lk, datBroker);
     }
 
     panelBodyHTML = html;
@@ -1551,6 +1870,7 @@ if (so && ro && so !== ro) return false;
     // Always replace content immediately — no conditional branching that could
     // leave the panel empty, and no setTimeout delay before content is visible.
     const bodyEl = document.getElementById('dlm-body');
+    if (!bodyEl) return;
     bodyEl.innerHTML = html;
     bodyEl.scrollTop = 0;
   }
@@ -1562,19 +1882,13 @@ if (so && ro && so !== ro) return false;
   const ROUTE_RE = /([A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2})\s*→\s*([A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2})/;
 
   async function showPanelDual(origin, dest, odM, oM, bM, datBroker, detailNode) {
+    const mySeq = ++_panelSeq;
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
     switchTab('history');
 
     const bodyEl = document.getElementById('dlm-body');
 
-    const titleEl = panel.querySelector('#dlm-title');
-    if (titleEl) {
-      const laneShort = dest
-        ? `${origin.split(',')[0].trim()} → ${dest.split(',')[0].trim()}`
-        : origin.split(',')[0].trim();
-      titleEl.innerHTML = `◈ ${esc(laneShort)}<small> · drag</small>`;
-    }
 
     // --- CSV section ---
     const pri = odM.length ? odM : oM.length ? oM : bM;
@@ -1595,13 +1909,13 @@ if (so && ro && so !== ro) return false;
     const lkd = new Set(Object.keys(lovedLoads));
     if (odM.length) {
       csvHTML += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-                 renderRecs(odM, '#34c759', 20, true, true, lkd);
+                 renderRecs(odM, odM.length >= 3 ? '#34c759' : '#f5a623', 20, true, true, lkd, datBroker);
     }
     if (!odM.length && oM.length) {
-      csvHTML += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lkd);
+      csvHTML += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lkd, datBroker);
     } else if (odM.length && oM.length) {
       const originOnly = oM.filter(r => !odM.find(x => x.loadNum === r.loadNum));
-      if (originOnly.length) csvHTML += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lkd);
+      if (originOnly.length) csvHTML += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lkd, datBroker);
     }
 
     const dbLoadingHTML = `
@@ -1610,11 +1924,12 @@ if (so && ro && so !== ro) return false;
         <div style="text-align:center;padding:20px;color:#aeaeb2;font-size:13px">Loading…</div>
       </div>`;
 
+    if (!bodyEl) return;
     bodyEl.innerHTML = csvHTML + dbLoadingHTML;
     bodyEl.scrollTop = 0;
 
     // --- DB fetch ---
-    const payload = { origin, destination: dest, licenseKey };
+    const payload = { origin: normCity(origin), destination: normCity(dest), licenseKey };
     let result;
     try {
       const resp = await fetch(MATCH_URL, {
@@ -1624,6 +1939,7 @@ if (so && ro && so !== ro) return false;
       });
       if (!resp.ok) {
         const errText = await resp.text();
+        if (_panelSeq !== mySeq) return;
         const dbErrHTML = `
           <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:16px 14px 6px;font-weight:600">🗄️ LaneIQ Database</div>
           <div style="text-align:center;padding:20px;color:#ff3b30;font-size:13px">Server error ${resp.status}</div>`;
@@ -1638,6 +1954,7 @@ if (so && ro && so !== ro) return false;
       }
       result = await resp.json();
     } catch (err) {
+      if (_panelSeq !== mySeq) return;
       const dbErrHTML = `
         <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:16px 14px 6px;font-weight:600">🗄️ LaneIQ Database</div>
         <div style="text-align:center;padding:20px;color:#ff3b30;font-size:13px">Connection error</div>`;
@@ -1663,7 +1980,7 @@ if (so && ro && so !== ro) return false;
       <div class="dlm-stats">
         <div><div class="dlm-sv">${data.count}</div><div class="dlm-sl">Loads</div></div>
         <div><div class="dlm-sv">${fmt(data.avgRate)}</div><div class="dlm-sl">Avg Rate</div></div>
-        <div><div class="dlm-sv">${fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
+        <div><div class="dlm-sv">${data.maxRate > 25000 ? 'N/A' : fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
       </div>`;
 
     const mapLoads = loads => (loads || []).map(l => ({
@@ -1680,13 +1997,14 @@ if (so && ro && so !== ro) return false;
       dbHTML += `<div style="text-align:center;padding:20px;color:#aeaeb2;font-size:13px">No database data found for this lane</div>`;
     } else {
       if (result.exact) {
-        dbHTML += `<div class="dlm-sum"><div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>${statsBlock(result.exact)}${renderRecs(mapLoads(result.exact.loads), '#34c759', 999, true, true)}</div>`;
+        dbHTML += `<div class="dlm-sum"><div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>${statsBlock(result.exact)}${renderRecs(mapLoads(result.exact.loads), '#34c759', 999, true, true, new Set(), datBroker)}</div>`;
       }
       if (result.origin) {
-        dbHTML += `<div class="dlm-sum" style="margin-top:8px"><div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>${statsBlock(result.origin)}${renderRecs(mapLoads(result.origin.loads), '#007aff', 999, true, true)}</div>`;
+        dbHTML += `<div class="dlm-sum" style="margin-top:8px"><div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>${statsBlock(result.origin)}${renderRecs(mapLoads(result.origin.loads), '#007aff', 999, true, true, new Set(), datBroker)}</div>`;
       }
     }
 
+    if (_panelSeq !== mySeq) return;
     const dbSection = document.getElementById('dlm-db-section');
     if (dbSection) {
       dbSection.outerHTML = dbHTML;
@@ -1704,11 +2022,13 @@ if (so && ro && so !== ro) return false;
   }
 
   async function showPanelFromAPI(origin, dest, detailNode) {
+    const mySeq = ++_panelSeq;
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
     switchTab('history');
 
     const bodyEl = document.getElementById('dlm-body');
+    if (!bodyEl) return;
     bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px">Loading LaneIQ data…</div>`;
     bodyEl.scrollTop = 0;
 
@@ -1725,20 +2045,13 @@ if (so && ro && so !== ro) return false;
       }
     }
 
+    if (_panelSeq !== mySeq) return;
     if (!origin) {
       bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px">Could not read lane — try clicking the row again</div>`;
       return;
     }
 
-    const titleEl = panel.querySelector('#dlm-title');
-    if (titleEl) {
-      const laneShort = dest
-        ? `${origin.split(',')[0].trim()} → ${dest.split(',')[0].trim()}`
-        : origin.split(',')[0].trim();
-      titleEl.innerHTML = `◈ ${esc(laneShort)}<small> · drag</small>`;
-    }
-
-    const payload = { origin, destination: dest, licenseKey };
+    const payload = { origin: normCity(origin), destination: normCity(dest), licenseKey };
     console.log('[LaneIQ] /match request:', payload);
 
     let result;
@@ -1751,6 +2064,7 @@ if (so && ro && so !== ro) return false;
       console.log('[LaneIQ] /match status:', resp.status);
       if (!resp.ok) {
         const errText = await resp.text();
+        if (_panelSeq !== mySeq) return;
         console.error('[LaneIQ] /match error response:', errText);
         bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#ff3b30;font-size:13px">Server error ${resp.status}<br><span style="font-size:11px;color:#aeaeb2">${esc(errText.slice(0, 120))}</span></div>`;
         return;
@@ -1758,6 +2072,7 @@ if (so && ro && so !== ro) return false;
       result = await resp.json();
       console.log('[LaneIQ] /match result:', result);
     } catch (err) {
+      if (_panelSeq !== mySeq) return;
       console.error('[LaneIQ] /match fetch failed:', err);
       bodyEl.innerHTML = `<div style="text-align:center;padding:36px 20px;color:#ff3b30;font-size:13px">Connection error<br><span style="font-size:11px;color:#aeaeb2">${esc(String(err))}</span></div>`;
       return;
@@ -1768,6 +2083,20 @@ if (so && ro && so !== ro) return false;
     // New backend: { exact: {...}, origin: {...} }
     if (result && result.loadCount != null) {
       result = { exact: result.loadCount > 0 ? { count: result.loadCount, avgRate: result.avgRate, minRate: result.minRate, maxRate: result.maxRate } : null, origin: null };
+    }
+
+    // Safety net: if /match still returns no exact hit but batch-highlight
+    // already confirmed one (different normalization path), trust the cache
+    // for aggregate stats. loads[] will be empty — stats-only display.
+    const _cachedHit = _dbMatchCache[`${origin}|${dest}`];
+    if (!result.exact && _cachedHit && _cachedHit.matchType === 'exact') {
+      result.exact = {
+        count:   _cachedHit.loadCount,
+        avgRate: _cachedHit.avgRate,
+        minRate: _cachedHit.minRate,
+        maxRate: _cachedHit.maxRate,
+        loads:   []
+      };
     }
 
     if (!result || (!result.exact && !result.origin)) {
@@ -1786,7 +2115,7 @@ if (so && ro && so !== ro) return false;
         <div class="dlm-stats">
           <div><div class="dlm-sv">${data.count}</div><div class="dlm-sl">Loads</div></div>
           <div><div class="dlm-sv">${fmt(data.avgRate)}</div><div class="dlm-sl">Avg Rate</div></div>
-          <div><div class="dlm-sv">${fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
+          <div><div class="dlm-sv">${data.maxRate > 25000 ? 'N/A' : fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
         </div>
         <div class="dlm-stats" style="margin-top:6px">
           <div><div class="dlm-sv">${fmt(data.minRate)}</div><div class="dlm-sl">Min Rate</div></div>
@@ -1814,7 +2143,7 @@ if (so && ro && so !== ro) return false;
         <div class="dlm-sum">
           <div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>
           ${statsBlock(result.exact)}
-          ${renderRecs(mappedLoads, '#34c759', 999, true, true)}
+          ${renderRecs(mappedLoads, mappedLoads.length >= 3 ? '#34c759' : '#f5a623', 999, true, true)}
         </div>`;
     }
 
@@ -1840,6 +2169,7 @@ if (so && ro && so !== ro) return false;
         </div>`;
     }
 
+    if (_panelSeq !== mySeq) return;
     panelBodyHTML = html;
     bodyEl.innerHTML = html;
     if (panelPopped) {
@@ -1855,7 +2185,7 @@ if (so && ro && so !== ro) return false;
     bodyEl.scrollTop = 0;
   }
 
-  function renderRecs(list, color, limit = 20, skipAnim = false, skipFilter = false, lovedKeys = new Set()) {
+  function renderRecs(list, color, limit = 20, skipAnim = false, skipFilter = false, lovedKeys = new Set(), datBroker = '') {
     // skipFilter = true for exact lane matches — never hide a confirmed match
     // regardless of whether it has a rate/pickup/commodity filled in.
     const filtered = skipFilter ? list : list.filter(r => {
@@ -1865,7 +2195,15 @@ if (so && ro && so !== ro) return false;
              (r.deliveryCompany && r.deliveryCompany !== 'nan' && r.deliveryCompany.trim()) ||
              (r.commodity       && r.commodity       !== 'nan' && r.commodity.trim());
     });
-    return filtered.slice(0, limit).map((r, i) => {
+    const normDatB = datBroker ? normBroker(datBroker).split(' ')[0] : '';
+    const sorted = normDatB
+      ? [...filtered].sort((a, b) => {
+          const aMatch = a.broker && normBroker(a.broker).includes(normDatB);
+          const bMatch = b.broker && normBroker(b.broker).includes(normDatB);
+          return (bMatch ? 1 : 0) - (aMatch ? 1 : 0);
+        })
+      : filtered;
+    return sorted.slice(0, limit).map((r, i) => {
       const key  = loveKey(r);
       _recPool[key] = r;
       const loved = lovedKeys.has(key);
@@ -1881,6 +2219,7 @@ if (so && ro && so !== ro) return false;
       const gUrl = (ln !== '—' && !(useDB && !useCSV)) ? gmailUrl(ln) : null;
       const gmailBtn = gUrl ? `<a href="${gUrl}" target="_blank" class="dlm-gmail-btn">📧 Gmail</a>` : '';
       const heartBtn = `<button class="dlm-heart-btn${loved ? ' dlm-loved' : ''}" data-load-key="${esc(key)}" title="${loved ? 'Remove from Preferred' : 'Save to Preferred'}">♥</button>`;
+      const noteBadgeBtn = loved ? `<button class="dlm-note-badge" data-note-key="note_${esc(key)}" data-load-key="${esc(key)}" title="Add note"><svg width="9" height="9" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-bottom:1px"><path d="M9.5 2L12 4.5L4.5 12H2V9.5L9.5 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Note</button>` : '';
 
       const pickupAddr   = parseCompanyAddress(r.pickupCompany   || '');
       const deliveryAddr = parseCompanyAddress(r.deliveryCompany || '');
@@ -1889,14 +2228,16 @@ if (so && ro && so !== ro) return false;
       const addrHtml = (addr) =>
         addr ? `${esc(addr.company)}${addr.street ? `<br><span style="font-size:10px;color:#8e8e93;font-weight:400">${esc(addr.street)}</span>` : ''}` : '';
 
+      const isBrokerMatch = normDatB && r.broker && normBroker(r.broker).includes(normDatB);
+      const cardColor = isBrokerMatch ? '#9b59b6' : color;
       return `
-        <div class="dlm-rec" style="border-left-color:${color};animation-delay:${skipAnim ? 0 : i*.04}s">
+        <div class="dlm-rec" style="border-left-color:${cardColor};animation-delay:${skipAnim ? 0 : i*.04}s">
           <div class="dlm-rh">
             <div style="display:flex;flex-direction:column;gap:2px;max-width:165px">
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
             </div>
-            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
+            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
           <div class="dlm-grid">
             <div class="dlm-k">Rate</div><div class="dlm-v dlm-rate">${esc(rd)}</div>
@@ -1922,36 +2263,62 @@ if (so && ro && so !== ro) return false;
 
     const seen = new Set();
     const lanes = [];
+    // rawKey ("rawOrigin|rawDest") → { rows: [], normKey }.
+    // _dbMatchCache stays keyed by the RAW dataset values (what processRow and
+    // the side-panel safety-net read), while the backend payload + result
+    // lookup use the DAT-abbreviation-expanded cities (same as /match), so the
+    // backend ILIKE prefix match can hit the DB row.
     const rowMap = {};
 
     rows.forEach(row => {
-      const origin = row.dataset.dlmOrigin || '';
-      const dest = row.dataset.dlmDest || '';
-      if (!origin || !dest) return;
-      const key = `${origin}|${dest}`;
-      if (!rowMap[key]) rowMap[key] = [];
-      rowMap[key].push(row);
-      if (!seen.has(key)) {
-        seen.add(key);
-        lanes.push({ origin, destination: dest });
+      const rawOrigin = row.dataset.dlmOrigin || '';
+      const rawDest   = row.dataset.dlmDest   || '';
+      if (!rawOrigin || !rawDest) return;
+      const rawKey = `${rawOrigin}|${rawDest}`;
+      // Expand DAT abbreviations the same way the side-panel /match lookup does
+      // (normCity: "American Cyn" → "American Canyon"). The backend echoes the
+      // result key back as the cities it received, so this is the lookup key.
+      const normOrigin = normCity(rawOrigin);
+      const normDest   = normCity(rawDest);
+      const normKey    = `${normOrigin}|${normDest}`;
+      if (!rowMap[rawKey]) rowMap[rawKey] = { rows: [], normKey };
+      rowMap[rawKey].rows.push(row);
+      if (!seen.has(normKey)) {
+        seen.add(normKey);
+        lanes.push({ origin: normOrigin, destination: normDest });
       }
     });
 
     if (!lanes.length) return;
 
+    const doFetch = () => fetch('https://laneiq-backend-production.up.railway.app/batch-match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lanes })
+    });
+
     try {
-      const resp = await fetch('https://laneiq-backend-production.up.railway.app/batch-match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lanes })
-      });
+      let resp;
+      try {
+        resp = await doFetch();
+      } catch (coldErr) {
+        // Railway cold-start can drop the first request ("Failed to fetch").
+        // Wait ~2s and try once more before giving up.
+        await new Promise(r => setTimeout(r, 2000));
+        resp = await doFetch();   // if this throws too, falls into the outer catch
+      }
       if (!resp.ok) return;
       const data = await resp.json();
+      const results = data.results || {};
 
-      Object.keys(data.results).forEach(key => {
-        const match = data.results[key];
-        _dbMatchCache[key] = match;
-        (rowMap[key] || []).forEach(row => {
+      let matched = 0;
+      Object.keys(rowMap).forEach(rawKey => {
+        const { rows: theseRows, normKey } = rowMap[rawKey];
+        const match = results[normKey];
+        if (!match) return;
+        matched++;
+        _dbMatchCache[rawKey] = match;   // raw key — processRow & safety-net read this
+        theseRows.forEach(row => {
           const alreadyColored = ['dlm-green','dlm-yellow','dlm-blue','dlm-purple'].some(c => row.classList.contains(c));
           if (alreadyColored && useCSV) return;
           row.style.backgroundColor = '';
@@ -1959,13 +2326,13 @@ if (so && ro && so !== ro) return false;
           if (match.matchType === 'origin') {
             row.classList.add('dlm-blue');
           } else {
-            row.classList.add(match.loadCount >= 5 ? 'dlm-green' : 'dlm-yellow');
+            row.classList.add(match.loadCount >= 3 ? 'dlm-green' : 'dlm-yellow');
           }
           row.dataset.dlmDbMatch = JSON.stringify(match);
         });
       });
 
-      console.log(`[LaneIQ] Batch highlight done — ${Object.keys(data.results).length}/${lanes.length} lanes matched`);
+      console.log(`[LaneIQ] Batch highlight done — ${matched}/${lanes.length} lanes matched`);
     } catch (err) {
       console.error('[LaneIQ] runBatchHighlight error:', err);
     }
@@ -1992,14 +2359,34 @@ if (so && ro && so !== ro) return false;
       processRow(r);
       injectEmailChip(r);
     });
-    if (_cityFailCount > 10) {
+    if (_cityFailCount > 50) {
       reportSelectorError('city-extraction-failed', `${_cityFailCount} rows failed city extraction in one scan`);
     }
     if (usingAPI) scheduleBatchHighlight();
   }
 
   // ── Init ────────────────────────────────────────────────────────────────────
+  function clearAllHighlights() {
+    document.querySelectorAll('.dlm-green, .dlm-yellow, .dlm-blue, .dlm-purple').forEach(el => {
+      el.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+    });
+    document.querySelectorAll('.dlm-badge').forEach(el => el.remove());
+    document.querySelectorAll('[data-dlm-origin]').forEach(el => {
+      delete el.dataset.dlmOrigin;
+      delete el.dataset.dlmDest;
+      delete el.dataset.dlmMatch;
+    });
+    _dbMatchCache = {};
+  }
+
   async function init() {
+    if (_initializing) return;
+    _initializing = true;
+    try { await _doInit(); } finally { _initializing = false; }
+  }
+
+  async function _doInit() {
+    if (!window.location.href.includes('one.dat.com')) return;
     if (_initialized) return; // indexes already in memory — nothing to do
 
     // License gate — Railway /validate is the authoritative check.
@@ -2057,7 +2444,7 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','senderEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','userName','userCompany','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height']);
 
     // Resolve tier/dataSource early so we can use them in the guards below
     licenseTier = s.licenseTier || 'solo';
@@ -2066,8 +2453,22 @@ if (so && ro && so !== ro) return false;
     licenseKey  = lic.licenseKey || '';
     const usingAPI = licenseTier === 'pro' && useDB;
 
-    // CSV gate — skip if no history loaded, unless Pro+laneiq (API mode needs no CSV)
-    if (!s.laneCount && !usingAPI) return;
+    // CSV gate — skip index loading if no active data source, but always build and
+    // show the panel so the user can reach the Setup tab to re-enable a source.
+    // Corrupted or missing storage values are treated the same as "both off".
+    if (!s.laneCount && !usingAPI) {
+      const _disabledMsg = '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Enable a data source in settings to see rates</div>';
+      panelPopped = s.panelPopped || false;
+      if (!panelPopped) {
+        if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
+        panel.style.display = 'flex';
+        if (_activeTab === 'history') switchTab('history');
+        const _disabledBody = document.getElementById('dlm-body');
+        if (_disabledBody) _disabledBody.innerHTML = _disabledMsg;
+      }
+      _initialized = true;
+      return;
+    }
 
     // Only validate/load CSV indexes when CSV data is present
     if (s.laneCount) {
@@ -2080,8 +2481,9 @@ if (so && ro && so !== ro) return false;
       brokerIndex = s.brokerIndex || {};
     }
 
-    gmailIndex       = s.gmailIndex    || 0;
-    senderEmail      = s.senderEmail   || '';
+    gmailIndex       = s.gmailIndex      || 0;
+    gmailOAuthEmail  = s.gmailOAuthEmail || '';
+    outlookOAuthEmail = s.outlookOAuthEmail || '';
     senderGmailIndex = typeof s.senderGmailIndex !== 'undefined' ? s.senderGmailIndex : 0;
     userName         = s.userName      || '';
     userCompany      = s.userCompany   || '';
@@ -2094,8 +2496,25 @@ Thanks,
 {name}
 {company}`;
 
-    panelPopped    = false;
-    chrome.storage.local.set({ panelPopped: false });
+    if (s.panelPopped) {
+      chrome.runtime.sendMessage({ type: 'checkPanelWindow' }, (res) => {
+        if (res?.exists) {
+          panelPopped = true;
+          // detached panel is still open — don't show inline panel
+        } else {
+          panelPopped = false;
+          chrome.storage.local.set({ panelPopped: false });
+          if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
+          panel.style.display = 'flex';
+          if (_activeTab === 'history') switchTab('history');
+        }
+      });
+    } else {
+      panelPopped = false;
+      if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
+      panel.style.display = 'flex';
+      if (_activeTab === 'history') switchTab('history');
+    }
     mapsApiKey     = s.mapsApiKey     || '';
     dlmMpg         = +s.dlmMpg         || 6.5;
     dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
@@ -2112,82 +2531,76 @@ Thanks,
     if (migrated) chrome.storage.local.set({ emailTemplates });
     _initialized = true;
 
-    function clearAllHighlights() {
-      document.querySelectorAll('.dlm-green, .dlm-yellow, .dlm-blue, .dlm-purple').forEach(el => {
-        el.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+    if (!_observersSetup) {
+      _observersSetup = true;
+
+      // Re-show the side panel when the pop-out window is closed.
+      // Also reinitialize when the user switches data source or uploads a new CSV
+      // so changes take effect without a full page reload.
+      chrome.storage.onChanged.addListener((changes) => {
+        if ('panelPopped' in changes) {
+          panelPopped = changes.panelPopped.newValue || false;
+          if (!panelPopped && panel && panelBodyHTML) panel.style.display = 'flex';
+        }
+        // Live-sync Maps key, calculator defaults, and email signature fields
+        // so popup edits take effect immediately in already-open DAT tabs.
+        if ('mapsApiKey' in changes) {
+          mapsApiKey = changes.mapsApiKey.newValue || '';
+        }
+        if ('dlmMpg' in changes)        dlmMpg        = +changes.dlmMpg.newValue        || 6.5;
+        if ('dlmFuelPrice' in changes)  dlmFuelPrice  = +changes.dlmFuelPrice.newValue  || 3.89;
+        if ('dlmDriverRate' in changes) dlmDriverRate = +changes.dlmDriverRate.newValue || 0;
+        if ('userName' in changes)    userName    = changes.userName.newValue    || '';
+        if ('userCompany' in changes) userCompany = changes.userCompany.newValue || '';
+        if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
+        if ('emailTemplate' in changes)    emailTemplate    = changes.emailTemplate.newValue    || emailTemplate;
+        if ('senderGmailIndex' in changes) senderGmailIndex = typeof changes.senderGmailIndex.newValue !== 'undefined' ? changes.senderGmailIndex.newValue : 0;
+        if ('gmailOAuthEmail' in changes)  gmailOAuthEmail  = changes.gmailOAuthEmail.newValue  || '';
+        if ('outlookOAuthEmail' in changes) outlookOAuthEmail = changes.outlookOAuthEmail.newValue || '';
+        if ('lovedLoads' in changes)      lovedLoads  = changes.lovedLoads.newValue  || {};
+        if ('gmailEmail' in changes)      gmailEmail  = changes.gmailEmail.newValue  || '';
+        if ('gmailIndex' in changes)      gmailIndex  = changes.gmailIndex.newValue  ?? 0;
+        if ('filesMeta'  in changes)      filesMeta   = changes.filesMeta.newValue   || [];
+        if ('emailTemplates' in changes)  emailTemplates      = changes.emailTemplates.newValue  || DEFAULT_TEMPLATES.map(t => ({...t}));
+        if ('activeTemplate' in changes)  activeTemplateIndex = changes.activeTemplate.newValue  ?? 0;
+        if ('useCSV' in changes || 'useDB' in changes || 'laneCount' in changes) {
+          clearAllHighlights();
+          _initialized = false;
+          odIndex = oIndex = brokerIndex = null;
+          init();
+        }
       });
-      document.querySelectorAll('.dlm-badge').forEach(el => el.remove());
-      document.querySelectorAll('[data-dlm-origin]').forEach(el => {
-        delete el.dataset.dlmOrigin;
-        delete el.dataset.dlmDest;
-        delete el.dataset.dlmMatch;
+
+      // Scan immediately — catches rows already in the DOM.
+      // The 500ms fallback handles DAT pages that finish rendering after the storage read.
+      scan();
+      setTimeout(scan, 500);
+
+      // Debounced observer: wait 300ms for the DOM to settle before re-scanning.
+      const obs = new MutationObserver(() => {
+        clearTimeout(_dlmT);
+        _dlmT = setTimeout(scan, 300);
       });
-      _dbMatchCache = {};
+      obs.observe(document.body, { childList: true, subtree: true });
+
+      let lastUrl = location.href;
+      setInterval(() => {
+        if (location.href !== lastUrl) {
+          lastUrl = location.href;
+          setTimeout(scan, 500);
+        }
+      }, 700);
+
+      setupRouteInterceptor();
+
+      document.addEventListener('click', e => {
+        if (e.target.closest('[id^="dlm-"]')) return;
+        const row = e.target.closest('[data-dlm-origin]') ||
+                    e.target.closest('[class*="row-container"],[class*="row-cells"]');
+        if (row) _lastClickedRow = row;
+      }, true);
     }
 
-    // Re-show the side panel when the pop-out window is closed.
-    // Also reinitialize when the user switches data source or uploads a new CSV
-    // so changes take effect without a full page reload.
-    chrome.storage.onChanged.addListener((changes) => {
-      if ('panelPopped' in changes) {
-        panelPopped = changes.panelPopped.newValue || false;
-        if (!panelPopped && panel && panelBodyHTML) panel.style.display = 'flex';
-      }
-      // Live-sync Maps key, calculator defaults, and email signature fields
-      // so popup edits take effect immediately in already-open DAT tabs.
-      if ('mapsApiKey' in changes) {
-        mapsApiKey = changes.mapsApiKey.newValue || '';
-      }
-      if ('dlmMpg' in changes)        dlmMpg        = +changes.dlmMpg.newValue        || 6.5;
-      if ('dlmFuelPrice' in changes)  dlmFuelPrice  = +changes.dlmFuelPrice.newValue  || 3.89;
-      if ('dlmDriverRate' in changes) dlmDriverRate = +changes.dlmDriverRate.newValue || 0;
-      if ('userName' in changes)    userName    = changes.userName.newValue    || '';
-      if ('userCompany' in changes) userCompany = changes.userCompany.newValue || '';
-      if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
-      if ('emailTemplate' in changes)    emailTemplate    = changes.emailTemplate.newValue    || emailTemplate;
-      if ('senderGmailIndex' in changes) senderGmailIndex = typeof changes.senderGmailIndex.newValue !== 'undefined' ? changes.senderGmailIndex.newValue : 0;
-      if ('senderEmail' in changes)      senderEmail      = changes.senderEmail.newValue      || '';
-      if ('lovedLoads' in changes)      lovedLoads  = changes.lovedLoads.newValue  || {};
-      if ('gmailEmail' in changes)      gmailEmail  = changes.gmailEmail.newValue  || '';
-      if ('gmailIndex' in changes)      gmailIndex  = changes.gmailIndex.newValue  ?? 0;
-      if ('filesMeta'  in changes)      filesMeta   = changes.filesMeta.newValue   || [];
-      if ('emailTemplates' in changes)  emailTemplates      = changes.emailTemplates.newValue  || DEFAULT_TEMPLATES.map(t => ({...t}));
-      if ('activeTemplate' in changes)  activeTemplateIndex = changes.activeTemplate.newValue  ?? 0;
-      if ('useCSV' in changes || 'useDB' in changes || 'laneCount' in changes) {
-        clearAllHighlights();
-        _initialized = false;
-        odIndex = oIndex = brokerIndex = null;
-        init();
-      }
-    });
-
-    // Scan immediately — catches rows already in the DOM.
-    // The 500ms fallback handles DAT pages that finish rendering after the storage read.
-    scan();
-    setTimeout(scan, 500);
-
-    // Debounced observer: wait 300ms for the DOM to settle before re-scanning.
-    const obs = new MutationObserver(() => {
-      clearTimeout(_dlmT);
-      _dlmT = setTimeout(scan, 300);
-    });
-    obs.observe(document.body, { childList: true, subtree: true });
-
-    let lastUrl = location.href;
-    setInterval(() => {
-      if (location.href !== lastUrl) {
-        lastUrl = location.href;
-        setTimeout(scan, 500);
-      }
-    }, 700);
-
-    setupRouteInterceptor();
-
-    document.addEventListener('click', e => {
-      if (e.target.closest('[id^="dlm-"]')) return;
-      const row = e.target.closest('[data-dlm-origin]');
-      if (row) _lastClickedRow = row;
-    }, true);
   }
 
   // ── Read current Origin + Destination from DAT's search bar ────────────────────
@@ -2438,6 +2851,7 @@ Thanks,
     let _expandTimer;
 
     function flushExpand() {
+      if (!_initialized) return;
       console.log('[LaneIQ] flushExpand fired, pending nodes:', _pendingExpand.size);
       for (const node of _pendingExpand) {
         if (!node.isConnected || node.closest('[id^="dlm-"]')) continue;
@@ -2456,10 +2870,10 @@ Thanks,
         let d = row?.dataset.dlmDest   || '';
         const b = row?.dataset.dlmBroker || '';
 
-        // In laneiq mode with no CSV, read cities from city-state-container
-        // elements scoped to the detail node (or its nearest containing parent).
-        if (!o && licenseTier === 'pro' && useDB) {
-          // Find the tightest ancestor that contains exactly 2 city-state elements
+        // If no processed row data, or destination is missing, try to scrape cities
+        // from the detail node or the clicked row element itself.
+        if (!o || !d) {
+          // Strategy 1: city-state-container elements inside the detail node
           let scope = node;
           let cityEls = scope.querySelectorAll('[class*="city-state-container"]');
           if (cityEls.length < 2) {
@@ -2470,11 +2884,34 @@ Thanks,
               ancestor = ancestor.parentElement;
             }
           }
-          console.log('[LaneIQ] city-state-container in scope:', cityEls.length,
-            [...cityEls].slice(0, 4).map(el => el.innerText.trim()));
-          if (cityEls.length >= 2) {
-            o = cityEls[0].innerText.trim();
-            d = cityEls[1].innerText.trim();
+          if (!o && cityEls.length >= 2) o = cityEls[0].innerText.trim();
+          if (!d && cityEls.length >= 2) d = cityEls[1].innerText.trim();
+          // Strategy 2: walk UP from the detail node to find the parent load row
+          if ((!o || !d) && node) {
+            let candidate = node.parentElement;
+            for (let i = 0; i < 8 && candidate; i++) {
+              if ((!o || !d) && i >= 4) {
+                const text = candidate.innerText || '';
+                const cityPattern = /[A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2}/g;
+                const hits = [...text.matchAll(cityPattern)];
+                if (hits.length >= 2) {
+                  if (!o) o = hits[0][0].trim();
+                  if (!d) d = hits[1][0].trim();
+                  break;
+                }
+              }
+              candidate = candidate.parentElement;
+            }
+          }
+          // Strategy 3: ROUTE_RE — try the detail node first (the → arrow lives there),
+          // then fall back to the clicked row element.
+          if ((!o || !d) && (node || row)) {
+            const src = (node ? node.innerText : '') || (row ? row.innerText || row.textContent : '') || '';
+            const m = ROUTE_RE.exec(src);
+            if (m) {
+              if (!o) o = m[1].trim();
+              if (!d) d = m[2].trim();
+            }
           }
         }
 
@@ -2484,15 +2921,30 @@ Thanks,
         _lastExpandKey = expandKey;
         _lastExpandTime = now;
         if (!useCSV && !useDB) {
-          // both sources off — nothing to show
+          // Both sources off — show panel with disabled state so toggles remain accessible
+          if (!panel) panel = buildPanel();
+          if (!panelPopped) panel.style.display = 'flex';
+          switchTab('history');
+          const _noSrcMsg = '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Enable a data source in settings to see rates</div>';
+          panelBodyHTML = _noSrcMsg;
+          const _noSrcBody = document.getElementById('dlm-body');
+          if (_noSrcBody) { _noSrcBody.innerHTML = _noSrcMsg; _noSrcBody.scrollTop = 0; }
         } else if (licenseTier === 'pro' && useDB && useCSV && o) {
           showPanelDual(o, d, d ? findOD(o, d) : [], findO(o), b ? findBroker(b, o) : [], b, node);
         } else if (licenseTier === 'pro' && useDB && !useCSV) {
           showPanelFromAPI(o, d, node);
         } else if (o) {
-          showPanel(o, d, d ? findOD(o, d) : [], findO(o), b ? findBroker(b, o) : [], b);
+          const odM = d ? findOD(o, d) : [];
+          const oM  = findO(o);
+          const bM  = b ? findBroker(b, o) : [];
+          if (odM.length || oM.length || bM.length) {
+            showPanel(o, d, odM, oM, bM, b);
+          } else {
+            showEmptyPanel(o, d);
+          }
+        } else {
+          clearPanel();
         }
-        // If no associated row found, do nothing — panel stays as-is.
       }
       _pendingExpand.clear();
     }
@@ -2585,12 +3037,13 @@ Thanks,
 
       // Reuse getDetailCities — it walks up from the email element, finding the
       // load's origin/dest from nearby data attributes or class-named elements.
-      const onClick = e => {
+      const onClick = async e => {
         e.stopPropagation(); e.preventDefault();
-        const { origin: freshOrigin, dest: freshDest } = getDetailCities(e.currentTarget);
-        const freshDate = getDetailDate(e.currentTarget);
-        sendEmail(email, freshOrigin, freshDest || '', freshDate);
-        flashChipSent(e.currentTarget);
+        const chip = e.currentTarget;
+        const { origin: freshOrigin, dest: freshDest } = getDetailCities(chip);
+        const freshDate = getDetailDate(chip);
+        const ok = await sendEmail(email, freshOrigin, freshDest || '', freshDate);
+        if (ok) flashChipSent(chip); else showSetupMsg(chip);
       };
 
       // Leaf element whose entire text is the email — style it in place

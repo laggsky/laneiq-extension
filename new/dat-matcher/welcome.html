@@ -1057,7 +1057,7 @@
               <tr>
                 <td><span class="col-name">weight</span></td>
                 <td><span class="badge-opt">Optional</span></td>
-                <td><span class="col-aliases">pallets, ft</span></td>
+                <td><span class="col-aliases">Weight / Pallets / FT, pallets, ft</span></td>
               </tr>
               <tr>
                 <td><span class="col-name">Pickup Company + Full Address</span></td>
@@ -1068,6 +1068,14 @@
                 <td><span class="col-name">Delivery Company + Full Address</span></td>
                 <td><span class="badge-opt">Optional</span></td>
                 <td><span class="col-aliases">Delivery Company + Full Address</span></td>
+              </tr>
+              <tr>
+                <td>
+                  <span class="col-name">Broker</span><br>
+                  <span class="col-note">Broker company name — shown in your match history panel.</span>
+                </td>
+                <td><span class="badge-opt">Optional</span></td>
+                <td><span class="col-aliases">Broker company name</span></td>
               </tr>
             </tbody>
           </table>
@@ -1080,6 +1088,7 @@
               <thead>
                 <tr>
                   <th>Load #</th>
+                  <th>Broker</th>
                   <th>Origin</th>
                   <th>Date</th>
                   <th>Destination</th>
@@ -1093,6 +1102,7 @@
               <tbody>
                 <tr>
                   <td>12345</td>
+                  <td>Echo Global</td>
                   <td>Sacramento, CA</td>
                   <td>01/15/2024</td>
                   <td>Chicago, IL</td>
@@ -1104,6 +1114,7 @@
                 </tr>
                 <tr>
                   <td>12346</td>
+                  <td>Coyote Logistics</td>
                   <td>Fresno, CA</td>
                   <td>02/03/2024</td>
                   <td>Dallas, TX</td>
@@ -1115,6 +1126,7 @@
                 </tr>
                 <tr>
                   <td>12347</td>
+                  <td>XPO Logistics</td>
                   <td>Los Angeles, CA</td>
                   <td>02/18/2024</td>
                   <td>Atlanta, GA</td>
@@ -1226,7 +1238,7 @@ This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Pleas
         </div>
 
         <div class="tip-note">
-          <strong>Customize your template:</strong> LaneIQ popup → Settings → Load Inquiry Email Template
+          <strong>Customize your template:</strong> Open the LaneIQ panel on any DAT load → go to the <strong>Templates</strong> tab → edit your subject line, message body, and connect your Gmail for one-click sending.
         </div>
 
         <div class="cta">

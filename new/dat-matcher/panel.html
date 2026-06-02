@@ -38,11 +38,18 @@
     /* Initial loading placeholder */
     .dlm-placeholder { text-align:center; padding:36px 20px; color:#aeaeb2; font-size:13px; line-height:1.6; }
 
-    /* Tabs */
-    #dlm-tabs { display:flex; flex-shrink:0; gap:3px; padding:5px 6px; background:#dcdce0; border-bottom:1px solid #c7c7cc; }
-    .dlm-tab { flex:1; padding:5px 0; font-size:11px; font-weight:500; color:#6e6e73; background:rgba(0,0,0,.06); border:none; border-radius:6px; cursor:pointer; letter-spacing:.01em; transition:background .12s,color .12s,box-shadow .12s; font-family:inherit; box-shadow:0 1px 2px rgba(0,0,0,.10); }
-    .dlm-tab.dlm-tab-active { background:#fff; color:#1c1c1e; box-shadow:0 2px 6px rgba(0,0,0,.18); }
-    .dlm-tab:hover:not(.dlm-tab-active) { background:rgba(255,255,255,.65); color:#3a3a3c; }
+    /* Sidebar nav */
+    #dlm-panel-main { display:flex; flex-direction:row; flex:1; min-height:0; overflow:hidden; }
+    #dlm-sidebar { width:92px; flex-shrink:0; background:#f2f2f7; display:flex; flex-direction:column; padding:8px 0 8px 6px; gap:4px; border-right:1px solid rgba(0,0,0,.06); overflow-y:auto; }
+    #dlm-content { display:flex; flex-direction:column; flex:1; min-width:0; overflow:hidden; background:#fff; }
+    .dlm-tab { width:100%; padding:12px 8px; font-size:11px; font-weight:500; color:#6e6e73; background:transparent; border:none; border-right:3px solid transparent; border-radius:8px 0 0 8px; cursor:pointer; letter-spacing:.01em; transition:background .12s,color .12s,border-color .12s; font-family:inherit; text-align:center; line-height:1.4; word-break:break-word; }
+    .dlm-tab.dlm-tab-active { background:#fff; color:#0058e0; font-weight:600; border-right:3px solid #0058e0; }
+    .dlm-tab:hover:not(.dlm-tab-active) { background:rgba(0,0,0,.04); color:#3a3a3c; }
+    .dlm-tab:not(:last-child) { border-bottom:1px solid rgba(0,0,0,.08); }
+
+    /* Templates */
+    .dlm-tpl-area { width:100%; border:1px solid #e5e5ea; border-radius:8px; padding:7px 9px; font-size:11px; font-family:inherit; color:#1d1d1f; background:#f9f9fb; resize:vertical; outline:none; box-sizing:border-box; line-height:1.5; }
+    .dlm-tpl-area:focus { border-color:#0058e0; background:#fff; box-shadow:0 0 0 2px rgba(0,88,224,.12); }
 
     /* Heart button */
     .dlm-heart-btn { background:none; border:none; cursor:pointer; font-size:20px; font-weight:700; color:#c7c7cc; padding:0; width:28px; line-height:1; display:inline-flex; align-items:center; justify-content:center; transition:color .15s; flex-shrink:0; }
@@ -53,27 +60,32 @@
 <body>
   <div id="dlm-wrap">
     <div id="dlm-panel-hdr">
-      <span id="dlm-title">◈ LANE HISTORY</span>
+      <span id="dlm-title">◈ Load History</span>
       <div class="dlm-hdr-btns">
         <button id="dlm-close" title="Close window">✕</button>
       </div>
     </div>
 
-    <div id="dlm-tabs">
-      <button class="dlm-tab dlm-tab-active" data-tab="history">Load History</button>
-      <button class="dlm-tab" data-tab="loved">♥ Preferred</button>
-      <button class="dlm-tab" data-tab="regions">Hot Regions</button>
-    </div>
-
-    <div id="dlm-search-wrap">
-      <span class="dlm-search-icon">⌕</span>
-      <input id="dlm-search" type="text" placeholder="Search origin, destination, broker…"
-             autocomplete="off" spellcheck="false">
-      <button id="dlm-search-clear" title="Clear search">✕</button>
-    </div>
-
-    <div id="dlm-body">
-      <div class="dlm-placeholder">Loading…</div>
+    <div id="dlm-panel-main">
+      <div id="dlm-sidebar">
+        <button class="dlm-tab dlm-tab-active" data-tab="history">Load History</button>
+        <button class="dlm-tab" data-tab="loved">Preferred</button>
+        <button class="dlm-tab" data-tab="regions">Hot Regions</button>
+        <button class="dlm-tab" data-tab="templates">Templates</button>
+        <button class="dlm-tab" data-tab="setup">Setup</button>
+        <button class="dlm-tab" data-tab="notes">Notes</button>
+      </div>
+      <div id="dlm-content">
+        <div id="dlm-search-wrap">
+          <span class="dlm-search-icon">⌕</span>
+          <input id="dlm-search" type="text" placeholder="Search origin, destination, broker, load #…"
+                 autocomplete="off" spellcheck="false">
+          <button id="dlm-search-clear" title="Clear search">✕</button>
+        </div>
+        <div id="dlm-body">
+          <div class="dlm-placeholder">Loading…</div>
+        </div>
+      </div>
     </div>
   </div>
   <script src="panel.js"></script>
