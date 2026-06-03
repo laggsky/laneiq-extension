@@ -32,8 +32,8 @@
 ---
 
 ## Current Version
-- Manifest: 1.30
-- Chrome Store target: v1.30 (not yet submitted)
+- Manifest: 1.31
+- Chrome Store target: v1.31 (submitted, awaiting Published confirmation)
 - Last submitted to store: v1.25 (May 26 2026)
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
