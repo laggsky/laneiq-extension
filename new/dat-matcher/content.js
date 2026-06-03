@@ -635,6 +635,20 @@ if (so && ro && so !== ro) return false;
     return '';
   }
 
+  // Derive {miles} at SEND time from a clicked chip: walk up to the row
+  // container that holds the DH-O cell and read it live. Works regardless of
+  // which injection path created the chip, and survives DAT re-renders.
+  function milesFromChip(el) {
+    let node = el;
+    while (node && node !== document.body) {
+      if (node.querySelector && node.querySelector('[data-test="load-dho-cell"], .deadhead')) {
+        return getMiles(node);
+      }
+      node = node.parentElement;
+    }
+    return '';
+  }
+
   // ── Style the broker's email address as a tappable chip ───────────────────
   function injectEmailChip(row) {
     if (row.dataset.dlmChip) return;
@@ -654,12 +668,10 @@ if (so && ro && so !== ro) return false;
     const chipDest   = row.dataset.dlmDest   || cityMatches[1] || dest;
     const dateMatch  = rowText.match(/\b(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/);
     const chipDate   = dateMatch ? dateMatch[1] : '';
-    const chipMiles  = getMiles(row);
-
     const onClick = async e => {
       e.stopPropagation(); e.preventDefault();
       const chip = e.currentTarget;
-      const ok = await sendEmail(email, chip.dataset.emailOrigin || '', chip.dataset.emailDest || '', chip.dataset.emailDate || '', chip.dataset.emailMiles || '');
+      const ok = await sendEmail(email, chip.dataset.emailOrigin || '', chip.dataset.emailDest || '', chip.dataset.emailDate || '', milesFromChip(chip));
       if (ok) flashChipSent(chip); else showSetupMsg(chip);
     };
 
@@ -672,7 +684,6 @@ if (so && ro && so !== ro) return false;
         a.dataset.emailOrigin = chipOrigin;
         a.dataset.emailDest   = chipDest;
         a.dataset.emailDate   = chipDate;
-        a.dataset.emailMiles  = chipMiles;
         a.classList.add('dlm-email-chip');
         a.title = `Click to email ${email}`;
         a.addEventListener('click', onClick, true);
@@ -696,7 +707,6 @@ if (so && ro && so !== ro) return false;
         parent.dataset.emailOrigin = chipOrigin;
         parent.dataset.emailDest   = chipDest;
         parent.dataset.emailDate   = chipDate;
-        parent.dataset.emailMiles  = chipMiles;
         parent.classList.add('dlm-email-chip');
         parent.title = `Click to email ${email}`;
         parent.addEventListener('click', onClick, true);
@@ -712,7 +722,6 @@ if (so && ro && so !== ro) return false;
       chip.dataset.emailOrigin = chipOrigin;
       chip.dataset.emailDest   = chipDest;
       chip.dataset.emailDate   = chipDate;
-      chip.dataset.emailMiles  = chipMiles;
       chip.textContent = email;
       chip.title = `Click to email ${email}`;
       chip.addEventListener('click', onClick, true);
@@ -3034,7 +3043,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         const chip = e.currentTarget;
         const { origin: freshOrigin, dest: freshDest } = getDetailCities(chip);
         const freshDate = getDetailDate(chip);
-        const ok = await sendEmail(email, freshOrigin, freshDest || '', freshDate);
+        const ok = await sendEmail(email, freshOrigin, freshDest || '', freshDate, milesFromChip(chip));
         if (ok) flashChipSent(chip); else showSetupMsg(chip);
       };
 
