@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LaneIQ — DAT Load Matcher",
-  "version": "1.31",
+  "version": "1.32",
   "description": "Highlights DAT loads that match your freight history. Color-coded by tier: same lane + broker, same lane, or same origin.",
   "permissions": [
     "storage",
@@ -52,6 +52,12 @@
         "content.css"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["city_coords.json"],
+      "matches": ["*://*.dat.com/*", "*://one.dat.com/*"]
     }
   ]
 }

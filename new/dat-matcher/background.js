@@ -1,3 +1,5 @@
+const ROUTE_CACHE_VERSION = 1;  // bump to invalidate all cached routes
+
 // Open the welcome page on first install (not on updates).
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
@@ -213,29 +215,55 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // Returns miles, duration, AND the encoded overview polyline for Static Maps rendering
   if (msg.type === 'getRoute') {
     const { origin, dest, apiKey } = msg;
-    const url = 'https://maps.googleapis.com/maps/api/directions/json' +
-      `?origin=${encodeURIComponent(origin)}` +
-      `&destination=${encodeURIComponent(dest)}` +
-      `&key=${encodeURIComponent(apiKey)}`;
+    // Normalize for the cache key only; the API call uses original-case values.
+    const cacheKey = `${String(origin).trim().toLowerCase()}|${String(dest).trim().toLowerCase()}`;
 
-    fetch(url)
-      .then(r => r.json())
-      .then(data => {
+    (async () => {
+      // (a/b) Cache hit → return immediately, no API call.
+      try {
+        const stored = (await chrome.storage.local.get('routeCache')).routeCache;
+        if (stored && stored._v === ROUTE_CACHE_VERSION && stored[cacheKey]) {
+          console.log('[LaneIQ] route cache HIT:', cacheKey);
+          sendResponse(stored[cacheKey]);
+          return;
+        }
+      } catch (e) { /* cache read failed — fall through to network */ }
+
+      // (c) Miss → call Directions API exactly as today.
+      console.log('[LaneIQ] route cache MISS, fetching:', cacheKey);
+      const url = 'https://maps.googleapis.com/maps/api/directions/json' +
+        `?origin=${encodeURIComponent(origin)}` +
+        `&destination=${encodeURIComponent(dest)}` +
+        `&key=${encodeURIComponent(apiKey)}`;
+      try {
+        const r = await fetch(url);
+        const data = await r.json();
         const route = data.routes?.[0];
         if (data.status === 'OK' && route) {
           const leg = route.legs[0];
-          sendResponse({
+          const result = {
             miles:    Math.round(leg.distance.value * 0.000621371),
             duration: leg.duration.text,
             polyline: route.overview_polyline.points,
-          });
+          };
+          // Write only successful responses. If _v mismatches, rebuild from scratch.
+          try {
+            const cur  = (await chrome.storage.local.get('routeCache')).routeCache;
+            const base = (cur && cur._v === ROUTE_CACHE_VERSION) ? cur : { _v: ROUTE_CACHE_VERSION };
+            base[cacheKey] = result;
+            await chrome.storage.local.set({ routeCache: base });
+            console.log('[LaneIQ] route cached:', cacheKey);
+          } catch (e) { /* cache write failed — must not break the response */ }
+          sendResponse(result);
         } else {
-          sendResponse({ error: data.status || 'API error' });
+          sendResponse({ error: data.status || 'API error' });  // NOT cached
         }
-      })
-      .catch(e => sendResponse({ error: e.message }));
+      } catch (e) {
+        sendResponse({ error: e.message });  // NOT cached
+      }
+    })();
 
-    return true;
+    return true;  // async response
   }
 });
 

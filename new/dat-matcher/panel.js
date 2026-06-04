@@ -18,6 +18,14 @@
   let useDB               = false;
   let licenseTier         = 'solo';
   let gmailEmail          = '';
+  // Outlook deep-link (rate-confirmation lookup) — mirrors the Gmail box. NOT OAuth.
+  // outlookHost: detected from what the user saves — 'office.com' (work) or 'live.com'
+  // (personal). Matching the user's session avoids a forced re-login.
+  let outlookEmail        = '';
+  let outlookConfigured   = false;
+  let outlookHost         = 'office.com';
+  // Exactly ONE active mail provider at a time. '' | 'gmail' | 'outlook'. Last save wins.
+  let activeMailProvider  = '';
   let filesMeta           = [];
 
   // ── CSV index helpers for file remove (panel.js — no upload, remove only) ───
@@ -284,8 +292,20 @@
                      background:${n===gmailIndex?'#0058e0':'rgba(0,0,0,.05)'};color:${n===gmailIndex?'#fff':'#6e6e73'}">${n}</button>`).join('')}
         </div>
         <div style="font-size:10px;color:#aeaeb2;line-height:1.5;margin-bottom:6px">Open your freight Gmail → check URL: mail.google.com/mail/<strong>u/1</strong>/</div>
-        <div id="dlm-setup-gmail-status" style="font-size:11px;font-weight:500;color:${gmailEmail?'#34c759':'#aeaeb2'}">
-          ${gmailEmail ? `✓ ${esc(gmailEmail)} · Account #${gmailIndex}` : 'Not configured yet'}
+        <div id="dlm-setup-gmail-status" style="font-size:11px;font-weight:500;color:${activeMailProvider==='gmail'?'#34c759':'#aeaeb2'}">
+          ${activeMailProvider==='gmail' ? `✓ Connected · ${esc(gmailEmail || 'Account #'+gmailIndex)}` : 'Not active'}
+        </div>
+      </div>
+      <div style="${CARD}">
+        <div style="${LABEL}">Outlook — Rate Confirmations</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input id="dlm-setup-outlook-input" type="text" value="${esc(outlookEmail)}" placeholder="Paste Outlook URL or your email"
+                 style="${INPUT};flex:1;min-width:0">
+          <button class="dlm-setup-outlook-save" style="${BTN}">Save</button>
+        </div>
+        <div style="font-size:10px;color:#aeaeb2;line-height:1.5;margin-bottom:6px">Opens your Outlook inbox — search the load # manually · using outlook.${outlookHost}</div>
+        <div id="dlm-setup-outlook-status" style="font-size:11px;font-weight:500;color:${activeMailProvider==='outlook'?'#34c759':'#aeaeb2'}">
+          ${activeMailProvider==='outlook' ? `✓ Connected${outlookEmail ? ' · '+esc(outlookEmail) : ''}` : 'Not active'}
         </div>
       </div>
       <div style="${CARD}">
@@ -522,6 +542,24 @@
     return `https://mail.google.com/mail/u/${gmailIndex}/#search/${encodeURIComponent(q)}`;
   }
 
+  // Detect the Outlook host from a pasted URL or email. live.com = personal
+  // (Outlook.com/Hotmail/Live/MSN), office.com = work/school (default).
+  function detectOutlookHost(raw) {
+    const low = String(raw || '').toLowerCase().trim();
+    if (low.includes('live.com'))   return 'live.com';
+    if (low.includes('office.com')) return 'office.com';
+    const m = low.match(/@([a-z0-9.-]+)/);
+    if (m) return /^(outlook\.com|hotmail\.com|live\.com|msn\.com)$/.test(m[1]) ? 'live.com' : 'office.com';
+    return 'office.com';
+  }
+
+  // Open the INBOX on the detected host (matching the user's session avoids a
+  // forced re-login) — they search the load # manually. loadNum unused; kept for
+  // signature parity with gmailUrl.
+  function outlookUrl(loadNum) {
+    return `https://outlook.${outlookHost}/mail/`;
+  }
+
   function addrHtml(addr) {
     if (!addr) return '';
     return esc(addr.company) +
@@ -554,13 +592,24 @@
       const ln     = String(r.loadNum||'').replace(/\n.*/,'').trim() || '—';
       const dt     = String(r.puDate||'').split('T')[0].substring(0, 10);
       const broker = String(r.broker||'').trim();
-      const gUrl   = ln !== '—' ? gmailUrl(ln) : null;
-      const gmailBtn  = gUrl ? `<a href="${gUrl}" target="_blank" class="dlm-gmail-btn">📧 Gmail</a>` : '';
+      // Exactly ONE mail button — the ACTIVE provider, when configured. Mutually
+      // exclusive (never both). Same DB-only guard + load# check.
+      const _canMail = ln !== '—' && !(useDB && !useCSV);
+      const gmailCfg = gmailIndex > 0 || !!gmailEmail;
+      const showGmail   = _canMail && activeMailProvider === 'gmail'   && gmailCfg;
+      const showOutlook = _canMail && activeMailProvider === 'outlook' && outlookConfigured;
+      const gmailBtn   = showGmail   ? `<a href="${gmailUrl(ln)}" target="_blank" rel="noopener" class="dlm-gmail-btn">📧 Gmail</a>` : '';
+      const outlookBtn = showOutlook ? `<a href="${outlookUrl(ln)}" target="_blank" rel="noopener" class="dlm-outlook-btn">📧 Outlook</a>` : '';
       const heartBtn  = `<button class="dlm-heart-btn${loved ? ' dlm-loved' : ''}" data-load-key="${esc(key)}" title="${loved ? 'Remove from Preferred' : 'Save to Preferred'}">♥</button>`;
       const noteBadgeBtn = loved ? `<button class="dlm-note-badge" data-note-key="note_${esc(key)}" data-load-key="${esc(key)}" title="Add note"><svg width="9" height="9" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-bottom:1px"><path d="M9.5 2L12 4.5L4.5 12H2V9.5L9.5 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Note</button>` : '';
       const pickupAddr   = parseCompanyAddress(r.pickupCompany   || '');
       const deliveryAddr = parseCompanyAddress(r.deliveryCompany || '');
       const commodity    = String(r.commodity || '').trim();
+      // Trailer/equipment tag (CSV only; DB records have no trailer field).
+      // Hidden entirely when blank/"nan"/missing — never shows N/A.
+      const trailer = String(r.trailer || '').trim();
+      const trailerTag = (trailer && trailer.toLowerCase() !== 'nan')
+        ? `<span class="dlm-eq">${esc(trailer)}</span>` : '';
       const isBrokerMatch = normDatB && r.broker && normBroker(r.broker).includes(normDatB);
       const cardColor = isBrokerMatch ? '#9b59b6' : color;
       return `
@@ -569,8 +618,9 @@
             <div style="display:flex;flex-direction:column;gap:2px;max-width:165px">
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
+              ${trailerTag}
             </div>
-            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
+            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${outlookBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
           <div class="dlm-grid">
             <div class="dlm-k">Rate</div><div class="dlm-v dlm-rate">${esc(rd)}</div>
@@ -586,9 +636,13 @@
   }
 
   // ── Render panel content from saved state ─────────────────────────────────
+  // Unified render: content.js is the single source of truth for the panel HTML
+  // (Current Load + Lane Lookup + matches, already stripColLabel-clean). This
+  // popped-out window only DISPLAYS that HTML — it no longer renders any city
+  // itself, so the two renderers can't drift apart again.
   function showContent(state, flash = false) {
     if (!state) return;
-    // Activate history tab visually without replacing body (showContent handles that)
+    // Activate history tab visually without replacing body (handled below)
     _activeTab = 'history';
     document.querySelectorAll('.dlm-tab').forEach(t =>
       t.classList.toggle('dlm-tab-active', t.dataset.tab === 'history')
@@ -596,52 +650,24 @@
     const searchWrap = document.getElementById('dlm-search-wrap');
     if (searchWrap) searchWrap.style.display = '';
 
-    if (state.mode === 'api') {
-      const bodyEl  = document.getElementById('dlm-body');
-      if (state.renderedHTML) {
-        bodyEl.innerHTML = state.renderedHTML;
-        panelBodyHTML = state.renderedHTML;
-      } else {
-        bodyEl.innerHTML = '<div class="dlm-placeholder">Click a highlighted row on DAT<br>to see booking history here</div>';
-      }
-      bodyEl.scrollTop = 0;
-      if (flash) { bodyEl.classList.remove('dlm-refreshed'); void bodyEl.offsetWidth; bodyEl.classList.add('dlm-refreshed'); }
-      return;
-    }
-    const { origin, dest, odM = [], oM = [], bM = [], datBroker } = state;
-
-    const pri = odM.length ? odM : oM.length ? oM : bM;
-    const st  = calcStats(pri);
-    const arrow = dest ? `<span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(dest)}` : '';
-
-    let html = `
-      <div class="dlm-sum">
-        <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Current Load</div>
-        <div class="dlm-lane">${esc(origin)}${arrow}</div>
-        <div class="dlm-stats">
-          <div><div class="dlm-sv">${st.count}</div><div class="dlm-sl">Bookings</div></div>
-          <div><div class="dlm-sv">${st.avg}</div><div class="dlm-sl">Avg Rate</div></div>
-          <div><div class="dlm-sv">${st.best}</div><div class="dlm-sl">Best Rate</div></div>
-        </div>
-      </div>`;
-
-    const lk = new Set(Object.keys(lovedLoads));
-    if (odM.length) {
-      html += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-              renderRecs(odM, odM.length >= 3 ? '#34c759' : '#f5a623', 20, true /* skipFilter */, lk, datBroker);
-    }
-
-    if (!odM.length && oM.length) {
-      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 20, false, lk, datBroker);
-    } else if (odM.length && oM.length) {
-      const originOnly = oM.filter(r => !odM.find(o => o.loadNum === r.loadNum));
-      if (originOnly.length)
-        html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 20, false, lk, datBroker);
-    }
-
-    panelBodyHTML = html;
     const bodyEl = document.getElementById('dlm-body');
-    bodyEl.innerHTML = html;
+    if (!bodyEl) return;
+
+    if (state.renderedHTML) {
+      // Rebuild _recPool from the match arrays so heart / save-to-Preferred can
+      // resolve a record from an injected card. The card's data-load-key was
+      // produced by content.js's loveKey(), which is identical to ours below.
+      for (const r of [...(state.odM || []), ...(state.oM || []), ...(state.bM || [])]) {
+        _recPool[loveKey(r)] = r;
+      }
+      bodyEl.innerHTML = state.renderedHTML;
+      panelBodyHTML = state.renderedHTML;
+    } else {
+      // Legacy/empty state (e.g. panelState persisted before this build, or a
+      // disabled-source message). Show the placeholder rather than re-rendering.
+      bodyEl.innerHTML = '<div class="dlm-placeholder">Click a highlighted row on DAT<br>to see booking history here</div>';
+      panelBodyHTML = '';
+    }
     bodyEl.scrollTop = 0;
 
     if (flash) {
@@ -735,7 +761,7 @@
   // ── Init ──────────────────────────────────────────────────────────────────
   async function init() {
     const s = await chrome.storage.local.get([
-      'panelState','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','odIndex','oIndex','brokerIndex','lovedLoads','emailTemplates','activeTemplate','signature','senderGmailIndex','useCSV','useDB','licenseTier','filesMeta'
+      'panelState','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','odIndex','oIndex','brokerIndex','lovedLoads','emailTemplates','activeTemplate','signature','senderGmailIndex','useCSV','useDB','licenseTier','filesMeta','outlookEmail','outlookConfigured','outlookHost','activeMailProvider'
     ]);
     gmailIndex          = s.gmailIndex  || 0;
     odIndex             = s.odIndex     || {};
@@ -757,6 +783,10 @@
     useDB               = s.useDB            ?? true;
     licenseTier         = s.licenseTier      || 'solo';
     gmailEmail          = s.gmailEmail       || '';
+    outlookEmail        = s.outlookEmail     || '';
+    outlookConfigured   = !!s.outlookConfigured;
+    outlookHost         = s.outlookHost      || 'office.com';
+    activeMailProvider  = s.activeMailProvider || '';
     filesMeta           = s.filesMeta        || [];
 
     if (s.panelState) {
@@ -790,7 +820,12 @@
         showUndoToast(key, savedEntry);
       } else {
         const rec = _recPool[key];
-        if (rec) lovedLoads[key] = { record: rec, savedAt: Date.now() };
+        // Strip transient radius-search fields so the "~X mi off" distance tag
+        // doesn't leak into the Preferred tab, where it's out of context.
+        if (rec) {
+          const { _oGap, _dGap, ...cleanRec } = rec;
+          lovedLoads[key] = { record: cleanRec, savedAt: Date.now() };
+        }
         btn.classList.add('dlm-loved');
         btn.title = 'Remove from Preferred';
         chrome.storage.local.set({ lovedLoads });
@@ -892,19 +927,28 @@
         const urlMatch = raw.match(/mail\.google\.com\/mail\/u\/(\d+)/);
         if (urlMatch) { gmailIndex = parseInt(urlMatch[1]); gmailEmail = `Account #${gmailIndex}`; }
         else if (raw && raw.includes('@')) { gmailEmail = raw; }
-        await chrome.storage.local.set({ gmailEmail, gmailIndex });
+        activeMailProvider = 'gmail';   // saving Gmail makes it active, deactivates Outlook
+        await chrome.storage.local.set({ gmailEmail, gmailIndex, activeMailProvider });
         if (_activeTab === 'setup') renderSetupBody(e.currentTarget);
         return;
       }
       if (e.target.closest('.dlm-setup-acct-btn')) {
         const acctBtn = e.target.closest('.dlm-setup-acct-btn');
         gmailIndex = parseInt(acctBtn.dataset.gmailIdx, 10);
-        await chrome.storage.local.set({ gmailIndex });
-        document.querySelectorAll('.dlm-setup-acct-btn').forEach(b => {
-          const a = parseInt(b.dataset.gmailIdx) === gmailIndex;
-          b.style.background = a ? '#007aff' : 'rgba(0,0,0,.05)';
-          b.style.color      = a ? '#fff'    : '#6e6e73';
-        });
+        activeMailProvider = 'gmail';   // selecting an account makes Gmail active
+        await chrome.storage.local.set({ gmailIndex, activeMailProvider });
+        // Full re-render so the Outlook box also drops its green "active" state.
+        if (_activeTab === 'setup') renderSetupBody(e.currentTarget);
+        return;
+      }
+      if (e.target.closest('.dlm-setup-outlook-save')) {
+        const raw = document.getElementById('dlm-setup-outlook-input')?.value.trim() || '';
+        outlookHost = detectOutlookHost(raw);   // match the user's account → no re-login
+        if (raw && raw.includes('@')) outlookEmail = raw;
+        outlookConfigured = true;
+        activeMailProvider = 'outlook';  // saving Outlook makes it active, deactivates Gmail
+        await chrome.storage.local.set({ outlookEmail, outlookConfigured, outlookHost, activeMailProvider });
+        if (_activeTab === 'setup') renderSetupBody(e.currentTarget);
         return;
       }
       const saveBtn = e.target.closest('.dlm-tpl-save');
@@ -986,6 +1030,10 @@
       if (changes.licenseTier)      licenseTier      = changes.licenseTier.newValue       || 'solo';
       if (changes.gmailEmail)       gmailEmail       = changes.gmailEmail.newValue        || '';
       if (changes.gmailIndex)       gmailIndex       = changes.gmailIndex.newValue        ?? 0;
+      if (changes.outlookEmail)     outlookEmail     = changes.outlookEmail.newValue      || '';
+      if (changes.outlookConfigured) outlookConfigured = !!changes.outlookConfigured.newValue;
+      if (changes.outlookHost)      outlookHost      = changes.outlookHost.newValue       || 'office.com';
+      if (changes.activeMailProvider) activeMailProvider = changes.activeMailProvider.newValue || '';
       if (changes.filesMeta)        filesMeta        = changes.filesMeta.newValue         || [];
       if (!changes.panelState || searchInput.value.trim()) return;
       const newState = changes.panelState.newValue;

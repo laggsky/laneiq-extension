@@ -29,7 +29,18 @@
 
 /* ── Panel ─────────────────────────────────────────────────────── */
 #dlm-panel { position:fixed; top:70px; right:16px; width:450px; height:72vh; max-height:none; background:#f5f5f7; border:none; border-radius:18px; z-index:2147483647; display:none; flex-direction:column; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif; box-shadow:0 24px 64px rgba(0,0,0,.16),0 4px 20px rgba(0,0,0,.09); overflow:hidden; }
-#dlm-panel.dlm-minimized { max-height:none; height:auto !important; }
+#dlm-panel.dlm-minimized {
+  max-height:none; height:auto !important;
+  /* Stand out against a white DAT page when collapsed — SAME treatment as the
+     route modal's collapsed bar (deeper shadow + defining 1px border). */
+  box-shadow:0 18px 44px rgba(0,0,0,.34),0 4px 12px rgba(0,0,0,.22);
+  border:1px solid rgba(0,0,0,.16);
+}
+#dlm-panel.dlm-minimized #dlm-panel-hdr {
+  /* Accented header so the bar reads as a floating control, not page content. */
+  background:linear-gradient(180deg,#f2f5fb,#e7ecf5);
+  border-bottom:none;
+}
 #dlm-panel.dlm-minimized #dlm-body,
 #dlm-panel.dlm-minimized #dlm-search-wrap { display:none; }
 
@@ -43,7 +54,7 @@
 #dlm-bottom:hover, #dlm-panel.dlm-resizing #dlm-bottom { background:rgba(0,0,0,.07); }
 
 /* Header */
-#dlm-panel-hdr { background:rgba(255,255,255,.88); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border-bottom:1px solid rgba(0,0,0,.06); padding:13px 14px 13px 16px; display:flex; align-items:center; justify-content:space-between; cursor:grab; user-select:none; flex-shrink:0; }
+#dlm-panel-hdr { background:#ffffff; border-bottom:1px solid rgba(0,0,0,.06); padding:13px 14px 13px 16px; display:flex; align-items:center; justify-content:space-between; cursor:grab; user-select:none; flex-shrink:0; }
 #dlm-panel-hdr:active { cursor:grabbing; }
 #dlm-panel-hdr span { font-size:13px; font-weight:600; letter-spacing:-.01em; color:#1d1d1f; text-transform:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #dlm-panel-hdr small { font-size:11px; color:#aeaeb2; margin-left:5px; font-weight:400; letter-spacing:0; text-transform:none; }
@@ -84,6 +95,8 @@
 .dlm-rh { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:7px; gap:8px; }
 .dlm-ln { font-size:11px; font-weight:700; color:#1d1d1f; padding:3px 8px; background:rgba(0,0,0,.04); border:none; border-radius:6px; cursor:pointer; user-select:all; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; letter-spacing:-.01em; }
 .dlm-dt { font-size:11px; color:#aeaeb2; font-weight:500; white-space:nowrap; padding-top:2px; }
+/* Trailer/equipment tag — subtle muted pill in the card's left column */
+.dlm-eq { display:inline-block; align-self:flex-start; font-size:10px; font-weight:600; color:#6e6e73; background:rgba(0,0,0,.05); border-radius:5px; padding:2px 6px; letter-spacing:.01em; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dlm-grid { display:grid; grid-template-columns:60px 1fr; gap:4px 8px; font-size:12px; align-items:start; }
 .dlm-k { color:#aeaeb2; font-size:9px; text-transform:uppercase; letter-spacing:.05em; padding-top:2px; font-weight:500; white-space:nowrap; }
 .dlm-v { color:#1d1d1f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -91,8 +104,8 @@
 .dlm-rate { color:#1d1d1f; font-weight:700; font-size:13px; letter-spacing:-.01em; }
 
 /* Gmail button */
-.dlm-gmail-btn { display:inline-flex; align-items:center; font-size:11px; font-weight:600; padding:4px 10px; border-radius:8px; background:rgba(0,122,255,.08); border:none; color:#007aff; text-decoration:none; white-space:nowrap; cursor:pointer; transition:background .15s; font-family:inherit; }
-.dlm-gmail-btn:hover { background:rgba(0,122,255,.15); }
+.dlm-gmail-btn, .dlm-outlook-btn { display:inline-flex; align-items:center; font-size:11px; font-weight:600; padding:4px 10px; border-radius:8px; background:rgba(0,122,255,.08); border:none; color:#007aff; text-decoration:none; white-space:nowrap; cursor:pointer; transition:background .15s; font-family:inherit; }
+.dlm-gmail-btn:hover, .dlm-outlook-btn:hover { background:rgba(0,122,255,.15); }
 
 /* ── Broker email chip — solid iOS-style pill button ────────────────────────── */
 .dlm-email-chip {
@@ -150,22 +163,42 @@ html body [data-dlm-route-ok]:active {
 /* ── Route modal ────────────────────────────────────────────────────────────── */
 #dlm-route-modal {
   position:fixed; inset:0; z-index:2147483646;
-  display:flex; align-items:center; justify-content:center;
+  pointer-events:none;            /* let DAT stay clickable underneath; box re-enables */
 }
-.dlm-modal-overlay {
-  position:absolute; inset:0;
-  background:rgba(0,0,0,.42); backdrop-filter:blur(4px);
-}
+.dlm-modal-overlay { display:none; }   /* backdrop removed — DAT visible/usable underneath */
 .dlm-modal {
-  position:relative; background:#fff; border-radius:16px;
-  box-shadow:0 32px 80px rgba(0,0,0,.22),0 4px 16px rgba(0,0,0,.1);
+  position:fixed; pointer-events:auto; background:#fff; border-radius:16px;
+  /* Standout treatment so the expanded modal doesn't get lost on a white DAT
+     page — same deeper shadow + 1px border as the collapsed bar. */
+  box-shadow:0 18px 44px rgba(0,0,0,.34),0 4px 12px rgba(0,0,0,.22);
+  border:1px solid rgba(0,0,0,.16);
   width:1222px; max-width:calc(100vw - 48px); max-height:calc(100vh - 72px);
+  min-width:520px; min-height:360px;
   display:flex; flex-direction:column; overflow:hidden;
   font-family:-apple-system,'SF Pro Text',BlinkMacSystemFont,system-ui,sans-serif;
 }
+/* 8-point resize handles (replace native resize:both). Thin invisible grab
+   strips on each edge + small corner zones; corners sit above edges. They live
+   inside the box (overflow:hidden won't clip them) and above the panes. The top
+   strip is a sibling of .dlm-modal-hdr — a mousedown on it never reaches the
+   header's drag listener, so edge-resize and header-drag don't conflict. */
+.dlm-mrz { position:absolute; z-index:5; }
+.dlm-mrz-n { top:0; left:0; right:0; height:7px; cursor:ns-resize; }
+.dlm-mrz-s { bottom:0; left:0; right:0; height:7px; cursor:ns-resize; }
+.dlm-mrz-e { top:0; bottom:0; right:0; width:7px; cursor:ew-resize; }
+.dlm-mrz-w { top:0; bottom:0; left:0; width:7px; cursor:ew-resize; }
+.dlm-mrz-ne, .dlm-mrz-nw, .dlm-mrz-se, .dlm-mrz-sw { width:14px; height:14px; z-index:6; }
+.dlm-mrz-ne { top:0; right:0; cursor:nesw-resize; }
+.dlm-mrz-nw { top:0; left:0; cursor:nwse-resize; }
+.dlm-mrz-se { bottom:0; right:0; cursor:nwse-resize; }
+.dlm-mrz-sw { bottom:0; left:0; cursor:nesw-resize; }
+.dlm-modal.dlm-modal-collapsed .dlm-mrz { display:none; }
 .dlm-modal-hdr {
   display:flex; align-items:center; justify-content:space-between;
   padding:16px 20px; border-bottom:1px solid rgba(0,0,0,.07); flex-shrink:0;
+  /* Match the Load History side panel header (#dlm-panel-hdr) exactly — solid
+     white so it never picks up the map/page behind it. */
+  background:#ffffff;
 }
 .dlm-modal-hdr-title { font-size:15px; font-weight:600; color:#1d1d1f; letter-spacing:-.02em; }
 .dlm-modal-hdr-title span { color:#aeaeb2; margin:0 6px; font-weight:300; }
@@ -175,6 +208,47 @@ html body [data-dlm-route-ok]:active {
   cursor:pointer; font-size:14px; color:#6e6e73; transition:background .12s; flex-shrink:0;
 }
 .dlm-modal-close:hover { background:rgba(0,0,0,.12); color:#1d1d1f; }
+.dlm-modal-min {
+  background:rgba(0,0,0,.06); border:none; border-radius:50%;
+  width:28px; height:28px; display:flex; align-items:center; justify-content:center;
+  cursor:pointer; font-size:14px; color:#6e6e73; transition:background .12s; flex-shrink:0;
+}
+.dlm-modal-min:hover { background:rgba(0,0,0,.12); color:#1d1d1f; }
+/* Tab strip + panes (multi-route tabbed modal) */
+.dlm-modal-tabs {
+  display:flex; gap:4px; padding:6px 10px 0; flex-shrink:0;
+  border-bottom:1px solid rgba(0,0,0,.07); background:#f2f2f7;  /* match side panel #dlm-sidebar */
+  overflow-x:auto;
+}
+.dlm-modal-tab {
+  display:flex; align-items:center; gap:6px; flex-shrink:0; max-width:190px;
+  padding:6px 9px; border-radius:8px 8px 0 0; cursor:pointer;
+  font-size:12px; color:#6e6e73; background:rgba(0,0,0,.04); white-space:nowrap;
+}
+.dlm-modal-tab-active { background:#fff; color:#1d1d1f; font-weight:600; box-shadow:0 -1px 0 rgba(0,0,0,.05) inset; }
+.dlm-modal-tab-label { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:150px; }
+.dlm-modal-tab-x {
+  background:none; border:none; cursor:pointer; font-size:10px; color:#aeaeb2;
+  padding:2px 3px; line-height:1; border-radius:50%; flex-shrink:0;
+}
+.dlm-modal-tab-x:hover { background:rgba(0,0,0,.12); color:#1d1d1f; }
+.dlm-modal-panes { flex:1; min-height:0; display:flex; }
+
+/* Minimized: collapse to the header bar only; stays draggable, keeps left/top. */
+.dlm-modal.dlm-modal-collapsed {
+  height:auto !important; min-height:0; resize:none;
+  /* Stand out against a white DAT page when collapsed: deeper shadow than the
+     expanded modal + a defining 1px border. (Collapsed-state only.) */
+  box-shadow:0 18px 44px rgba(0,0,0,.34),0 4px 12px rgba(0,0,0,.22);
+  border:1px solid rgba(0,0,0,.16);
+}
+.dlm-modal.dlm-modal-collapsed .dlm-modal-hdr {
+  /* Accented header so the bar reads as a floating control, not page content. */
+  background:linear-gradient(180deg,#f2f5fb,#e7ecf5);
+  border-bottom:none;
+}
+.dlm-modal.dlm-modal-collapsed .dlm-modal-panes,
+.dlm-modal.dlm-modal-collapsed .dlm-modal-tabs { display:none; }
 .dlm-modal-body { display:flex; flex:1; min-height:0; overflow:hidden; }
 
 /* Map column */
@@ -270,3 +344,23 @@ html body [data-dlm-route-ok]:active {
 /* ── Undo toast ─────────────────────────────────────────────────────────────── */
 .dlm-undo-toast { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); background:#3a3a3c; color:#fff; border-radius:20px; padding:8px 16px; font-size:12px; font-weight:500; white-space:nowrap; z-index:2147483647; box-shadow:0 4px 16px rgba(0,0,0,.25); pointer-events:all; animation:dlmFadeUp .2s ease both; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif; }
 .dlm-undo-btn { background:none; border:none; color:#fbbf24; font-size:12px; font-weight:700; cursor:pointer; padding:0 0 0 8px; font-family:inherit; }
+
+/* ── Lane Lookup (radius) ────────────────────────────────────────────────────── */
+#dlm-radius-section { margin-top:4px; }
+.dlm-radius-controls { background:#fff; border-radius:14px; padding:12px 14px; margin:0 0 4px; box-shadow:0 1px 4px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04); display:flex; flex-direction:column; gap:9px; }
+.dlm-radius-row { display:flex; align-items:center; gap:9px; }
+.dlm-r-tag { font-size:10px; font-weight:600; color:#aeaeb2; text-transform:uppercase; letter-spacing:.05em; flex-shrink:0; width:74px; }
+.dlm-r-city { flex:1; min-width:0; background:rgba(0,0,0,.05); border:1px solid transparent; border-radius:8px; color:#1d1d1f; font-size:12px; font-weight:500; padding:6px 9px; font-family:inherit; outline:none; transition:background .15s,box-shadow .15s,border-color .15s; }
+.dlm-r-city:focus { background:#fff; border-color:#0058e0; box-shadow:0 0 0 3px rgba(0,88,224,.14); }
+.dlm-r-city::placeholder { color:#c7c7cc; font-weight:400; }
+.dlm-radius-slider-row .dlm-r-slider { flex:1; min-width:0; }
+.dlm-r-slider { -webkit-appearance:none; appearance:none; height:4px; border-radius:2px; background:rgba(0,0,0,.12); outline:none; cursor:pointer; }
+.dlm-r-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:16px; height:16px; border-radius:50%; background:#0058e0; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,.25); border:2px solid #fff; }
+.dlm-r-slider::-moz-range-thumb { width:16px; height:16px; border-radius:50%; background:#0058e0; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,.25); border:2px solid #fff; }
+.dlm-r-mi { font-size:11px; font-weight:600; color:#0058e0; flex-shrink:0; width:46px; text-align:right; font-variant-numeric:tabular-nums; }
+.dlm-radius-sum { background:#fffaf0; border:1px solid rgba(245,166,35,.3); border-radius:10px; padding:9px 12px; margin:0 0 8px; }
+.dlm-radius-sum.dlm-radius-sum-broad { background:#f0f6ff; border-color:rgba(0,122,255,.28); }
+.dlm-radius-sum-label { font-size:12px; font-weight:500; color:#3a3a3c; line-height:1.45; letter-spacing:-.01em; }
+.dlm-radius-sum-label b { font-weight:700; color:#1d1d1f; }
+.dlm-radius-note { text-align:center; padding:18px 16px; color:#aeaeb2; font-size:12px; line-height:1.5; }
+.dlm-radius-note-warn { text-align:left; color:#92400e; background:#fffaf0; border:1px solid rgba(245,166,35,.3); border-radius:10px; padding:11px 13px; margin:0 0 8px; }

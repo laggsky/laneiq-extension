@@ -8,6 +8,7 @@
 
   // ── State ───────────────────────────────────────────────────────────────────
   let odIndex = null, oIndex = null, brokerIndex = null;
+  let _cityCoords = null; // "city, st" -> [lat,lng]; loaded once from city_coords.json
   let emailSubject = '', emailTemplate = '', senderGmailIndex = 0;
   let gmailOAuthEmail = '';
   let outlookOAuthEmail = '';
@@ -18,7 +19,13 @@
   let _clearPanelTimer;
   let isDragging = false, dragOffX = 0, dragOffY = 0;
   let isResizing = false, resizeRightEdge = 0, resizeCorner = false, _resizeBottomOnly = false;
+  let _routeModalRect = null;      // {left,top,width,height,min} — restored across route-modal opens
+  let _routeModalTeardown = null;  // tears down the previous modal's listeners/observer before reopen
+  let _routeModal = null;          // live tabbed-modal controller { box, openTab, switchTab, closeTab, doClose }
   let _dlmT;
+  let _radiusTimer = null;
+  // Lane Lookup radius settings persist across load-row switches + panel rebuilds.
+  let _radiusOriginMi = 50, _radiusDestMi = 50;
   let _batchTimer = null;
   let _zeroRowStreak = 0;
   let _cityFailCount  = 0;
@@ -30,6 +37,15 @@
   let emailTemplates      = [];
   let activeTemplateIndex = 0;
   let gmailEmail          = '';
+  // Outlook deep-link (rate-confirmation lookup) — mirrors the Gmail box. NOT OAuth.
+  // outlookConfigured: the user has saved an Outlook value at least once.
+  // outlookHost: detected from what the user saves — 'office.com' (work/school) or
+  // 'live.com' (personal). Opening the wrong one forces a re-login, so we match it.
+  let outlookEmail        = '';
+  let outlookConfigured   = false;
+  let outlookHost         = 'office.com';
+  // Exactly ONE active mail provider at a time. '' | 'gmail' | 'outlook'. Last save wins.
+  let activeMailProvider  = '';
   let filesMeta           = [];
 
   // ── CSV utility functions (mirrored from popup.js for Setup tab) ─────────────
@@ -65,6 +81,13 @@
   }
   function buildIndexesFromCSVRows(rows, fileIdx) {
     const odIdx = {}, oIdx = {}, brkIdx = {}; let count = 0;
+    // Resolve the trailer/equipment column once per file (all rows share headers).
+    // Case-insensitive + trimmed match against the recognized header variants.
+    const TRAILER_HEADERS = ['trailer', 'trailer type', 'equipment', 'equip', 'eq'];
+    let trailerCol = '';
+    if (rows.length) for (const k of Object.keys(rows[0])) {
+      if (TRAILER_HEADERS.includes(k.trim().toLowerCase())) { trailerCol = k; break; }
+    }
     for (const row of rows) {
       const origin = (row['Origin']||row['PickCity']||row['Pick City']||row['Origin City']||row['From City']||row['Shipper City']||'').trim();
       const dest   = (row['Destination']||row['DropCity']||row['Drop City']||row['Destination City']||row['To City']||row['Consignee City']||'').trim();
@@ -73,7 +96,7 @@
       rateClean = rateClean.replace(/,/g,'');
       const rate = isNaN(parseFloat(rateClean)) ? '' : String(parseFloat(rateClean));
       const broker = (row['Broker']||row['Broker company name']||'').trim();
-      const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight / Pallets / FT']||row['Weight']||row['Wt']||row['WT']||row['Weight (lbs)']||row['Gross Weight']||row['GrossWeight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), _f: fileIdx };
+      const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight / Pallets / FT']||row['Weight']||row['Wt']||row['WT']||row['Weight (lbs)']||row['Gross Weight']||row['GrossWeight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), trailer: trailerCol ? (row[trailerCol]||'').trim() : '', _f: fileIdx };
       if (!origin || origin.length < 2) continue; count++;
       const no = normKey(origin), nd = normKey(dest);
       if (no && nd) { const k = no+'|'+nd; if (!odIdx[k]) odIdx[k]=[]; odIdx[k].push(record); }
@@ -227,6 +250,208 @@
     return str.replace(/\b([A-Z][a-z]+)\b/g, (match) => abbr[match] || match);
   }
 
+  // ── Coordinate lookup (bundled city_coords.json, v1.32 radius matching) ──────
+  async function loadCityCoords() {
+    if (_cityCoords) return _cityCoords;
+    try {
+      const resp = await fetch(chrome.runtime.getURL('city_coords.json'));
+      _cityCoords = await resp.json();
+      console.log('[LaneIQ] city_coords loaded:', Object.keys(_cityCoords).length, 'cities');
+    } catch (e) {
+      console.error('[LaneIQ] city_coords load failed:', e.message);
+      _cityCoords = {};
+    }
+    return _cityCoords;
+  }
+
+  // [lat,lng] or null. Uses the SAME normKey() the indexes use → direct hash hit.
+  function getCoords(cityStateString) {
+    if (!_cityCoords || !cityStateString) return null;
+    return _cityCoords[normKey(cityStateString)] || null;
+  }
+
+  // Great-circle distance in miles between two [lat,lng] pairs.
+  function distanceMiles(a, b) {
+    if (!a || !b) return null;
+    const R = 3958.7613, toRad = d => d * Math.PI / 180;
+    const dLat = toRad(b[0] - a[0]), dLng = toRad(b[1] - a[1]);
+    const h = Math.sin(dLat/2)**2 +
+              Math.cos(toRad(a[0]))*Math.cos(toRad(b[0]))*Math.sin(dLng/2)**2;
+    return Math.round(2 * R * Math.asin(Math.min(1, Math.sqrt(h))));
+  }
+
+  // ── Radius (Lane Lookup) matching ───────────────────────────────────────────
+  // C1 coverage fallback: when a record's city field doesn't resolve, recover
+  // "City, ST" from the tail of its full address ("…Street, CITY, ST ZIP") and
+  // retry getCoords. Strictly additive — only invoked on a primary-lookup miss.
+  function coordsFromAddressTail(raw) {
+    if (!raw || raw === 'nan') return null;
+    // Drop a trailing ZIP, then grab the final "City, ST" pair.
+    const s = String(raw).replace(/\s+\d{5}(-\d{4})?\s*$/, '').trim();
+    const m = s.match(/([A-Za-z][A-Za-z\s\.'\-]{1,30}),\s*([A-Za-z]{2})\s*$/);
+    if (!m) return null;
+    return getCoords(m[1].trim() + ', ' + m[2].trim());
+  }
+
+  // Walk the CSV history and return every load whose ORIGIN is within
+  // originRadiusMi of the searched origin AND whose DEST is within destRadiusMi
+  // of the searched dest. Loads where either city lacks coords (the ~13% misses)
+  // are silently skipped — never error. Exact-lane records are INCLUDED (they
+  // belong in the radius set; they also appear in the exact section above).
+  //
+  // Records come straight out of oIndex, which holds the SAME full record object
+  // odIndex does (buildIndexesFromCSVRows) — so each carries destination, rate,
+  // broker, puDate, loadNum, weight, pickupCompany/deliveryCompany, etc.
+  function radiusMatch(origin, dest, originRadiusMi, destRadiusMi) {
+    if (!oIndex || !_cityCoords) return [];
+    const oCrd = getCoords(origin);
+    const dCrd = getCoords(dest);
+    if (!oCrd || !dCrd) return []; // can't anchor a radius without both coords
+
+    const out = [];
+    for (const [oKey, recs] of Object.entries(oIndex)) {
+      // oIndex keys are already normKey()'d, so hit _cityCoords directly.
+      // C1: on a miss, recover origin coords from a record's pickup address tail.
+      let recOCrd = _cityCoords[oKey];
+      if (!recOCrd) {
+        for (const r of recs) {
+          const c = coordsFromAddressTail(r.pickupCompany);
+          if (c) { recOCrd = c; break; }
+        }
+      }
+      if (!recOCrd) continue;
+      const oGap = distanceMiles(oCrd, recOCrd);   // straight-line city-center miles
+      if (oGap > originRadiusMi) continue;
+      for (const r of recs) {
+        // C1: on a dest miss, recover from the delivery address tail.
+        let recDCrd = _cityCoords[normKey(r.destination || '')];
+        if (!recDCrd) recDCrd = coordsFromAddressTail(r.deliveryCompany);
+        if (!recDCrd) continue;
+        const dGap = distanceMiles(dCrd, recDCrd);
+        if (dGap > destRadiusMi) continue;
+        // Shallow copy so the gap fields ride along WITHOUT mutating the shared
+        // oIndex/odIndex/brokerIndex record (the blue same-origin fallback reuses
+        // those, and must NOT inherit _oGap/_dGap → keeps distance labels yellow-only).
+        out.push({ ...r, _oGap: oGap, _dGap: dGap });
+      }
+    }
+
+    // dedup() removes duplicates then sorts by date; re-sort AFTER for the order
+    // we want: exact lane first (both gaps ~0), then origin gap asc, dest gap asc.
+    const deduped = dedup(out);
+    const NEAR = 2; // miles; <2mi each rounds to ~0 → treated as an exact lane
+    deduped.sort((a, b) => {
+      const aExact = (a._oGap < NEAR && a._dGap < NEAR) ? 0 : 1;
+      const bExact = (b._oGap < NEAR && b._dGap < NEAR) ? 0 : 1;
+      if (aExact !== bExact) return aExact - bExact;
+      if (a._oGap !== b._oGap) return a._oGap - b._oGap;
+      return a._dGap - b._dGap;
+    });
+    return deduped;
+  }
+
+  // Build the entire Lane Lookup section HTML (controls + summary + cards).
+  // Returns '' when there's no CSV index to search. The summary is scoped to
+  // whatever is being shown: tight radius matches, or — on zero matches — the
+  // broad same-origin fallback, LABELED so a dispatcher is never misled.
+  function renderRadiusSection(origin, dest, originMi, destMi) {
+    if (!oIndex || Object.keys(oIndex).length === 0) return '';
+
+    const oCity = esc(origin || '');
+    const dCity = esc(dest || '');
+    const controls = `
+      <div class="dlm-stitle" style="margin-top:16px">Lane Lookup</div>
+      <div class="dlm-radius-controls">
+        <div class="dlm-radius-row">
+          <span class="dlm-r-tag">From</span>
+          <input class="dlm-r-city" id="dlm-r-origin" type="text" value="${oCity}" placeholder="Origin city, ST" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="dlm-radius-row dlm-radius-slider-row">
+          <span class="dlm-r-tag">Origin radius</span>
+          <input class="dlm-r-slider" id="dlm-r-origin-mi" type="range" min="0" max="300" step="25" value="${originMi}">
+          <span class="dlm-r-mi" id="dlm-r-origin-mi-val">${originMi} mi</span>
+        </div>
+        <div class="dlm-radius-row">
+          <span class="dlm-r-tag">To</span>
+          <input class="dlm-r-city" id="dlm-r-dest" type="text" value="${dCity}" placeholder="Dest city, ST" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="dlm-radius-row dlm-radius-slider-row">
+          <span class="dlm-r-tag">Dest radius</span>
+          <input class="dlm-r-slider" id="dlm-r-dest-mi" type="range" min="0" max="300" step="25" value="${destMi}">
+          <span class="dlm-r-mi" id="dlm-r-dest-mi-val">${destMi} mi</span>
+        </div>
+      </div>
+      <div id="dlm-radius-results">${renderRadiusResults(origin, dest, originMi, destMi)}</div>`;
+    return `<div id="dlm-radius-section">${controls}</div>`;
+  }
+
+  // The summary + cards portion only — re-rendered live on slider/field change
+  // without rebuilding the controls (so focus/drag state is preserved).
+  function renderRadiusResults(origin, dest, originMi, destMi) {
+    const lk = new Set(Object.keys(lovedLoads));
+    const oCity = esc(origin || ''), dCity = esc(dest || '');
+
+    if (!origin || !dest) {
+      return `<div class="dlm-radius-note">Enter both an origin and a destination to search nearby lanes.</div>`;
+    }
+
+    // Same-origin floor — pure string match, needs NO coords. Computed once so it
+    // can back both the missing-coords branch and the zero-radius-match branch.
+    const originLoads = findO(origin);
+    const broadCards = (label) => {
+      const st = calcStats(originLoads);
+      return `
+        <div class="dlm-radius-sum dlm-radius-sum-broad">
+          <div class="dlm-radius-sum-label">${label}: avg <b>${st.avg}</b>, best <b>${st.best}</b> (${originLoads.length} loads)</div>
+        </div>
+        ${renderRecs(originLoads, '#007aff', 50, true, true, lk)}`;
+    };
+
+    // U1 — missing anchor coords: radius can't run, but the same-origin floor
+    // still can. Explain why + how to fix, and show the floor if it exists.
+    if (!getCoords(origin) || !getCoords(dest)) {
+      const missing = !getCoords(origin) ? oCity : dCity;
+      const tail = originLoads.length ? ` Showing all loads from ${oCity} instead:` : '';
+      let html = `<div class="dlm-radius-note dlm-radius-note-warn">Couldn't locate ${missing} on the map — can't run a radius search. Try a nearby larger city in the field above.${tail}</div>`;
+      if (originLoads.length) html += broadCards(`All loads from ${oCity}`);
+      return html;
+    }
+
+    const matches = radiusMatch(origin, dest, originMi, destMi);
+    if (matches.length) {
+      const st = calcStats(matches);
+      return `
+        <div class="dlm-radius-sum">
+          <div class="dlm-radius-sum-label">${oCity} → ${dCity} area · avg <b>${st.avg}</b>, best <b>${st.best}</b> (${matches.length} loads)</div>
+        </div>
+        ${renderRecs(matches, '#f5a623', 50, true, true, lk)}`;
+    }
+
+    // U1 — coords OK but zero radius matches AND zero same-origin: actionable,
+    // never a dead end.
+    if (!originLoads.length) {
+      return `<div class="dlm-radius-note">No loads near this lane in your history. Widen the radius, or try a nearby larger city.</div>`;
+    }
+
+    // U1 — coords OK, zero radius, but same-origin exists: broad blue fallback,
+    // LABELED clearly so a dispatcher never mistakes it for a tight lane match.
+    return broadCards(`No close lane matches. Broader — all loads from ${oCity}`);
+  }
+
+  // Dev aid — real-world coord hit rate vs the loaded CSV indexes.
+  function logCoordCoverage() {
+    if (!_cityCoords) return;
+    const cities = new Set();
+    if (oIndex)  for (const k of Object.keys(oIndex)) cities.add(k);
+    if (odIndex) for (const k of Object.keys(odIndex)) {
+      const [o, d] = k.split('|');
+      if (o) cities.add(o); if (d) cities.add(d);
+    }
+    let matched = 0;
+    for (const c of cities) if (_cityCoords[c]) matched++;
+    console.log(`[LaneIQ] coord coverage: ${matched}/${cities.size} cities matched`);
+  }
+
   // ── Lookup functions ────────────────────────────────────────────────────────
   // Index keys are built by popup.js as normKey(origin)+'|'+normKey(dest),
   // preserving the state so "Columbia, MO" and "Columbia, PA" are separate
@@ -362,6 +587,24 @@ if (so && ro && so !== ro) return false;
     return `https://mail.google.com/mail/u/${gmailIndex}/#search/${encodeURIComponent(q)}`;
   }
 
+  // Detect the Outlook host from a pasted URL or email. live.com = personal
+  // (Outlook.com/Hotmail/Live/MSN), office.com = work/school (default).
+  function detectOutlookHost(raw) {
+    const low = String(raw || '').toLowerCase().trim();
+    if (low.includes('live.com'))   return 'live.com';
+    if (low.includes('office.com')) return 'office.com';
+    const m = low.match(/@([a-z0-9.-]+)/);
+    if (m) return /^(outlook\.com|hotmail\.com|live\.com|msn\.com)$/.test(m[1]) ? 'live.com' : 'office.com';
+    return 'office.com';
+  }
+
+  // Outlook can't reliably deep-link a search, so open the INBOX on the detected
+  // host (matching the user's session avoids a forced re-login) — they search the
+  // load # manually. loadNum is unused; kept for signature parity with gmailUrl.
+  function outlookUrl(loadNum) {
+    return `https://outlook.${outlookHost}/mail/`;
+  }
+
   // ── Clean DAT's special characters from city text ────────────────────────
   function cleanCity(str) {
     let s = String(str || '')
@@ -376,6 +619,15 @@ if (so && ro && so !== ro) return false;
     if (m && !/,\s*[A-Z]{2}$/.test(m[2])) return m[1].trim();
     return s;
   }
+
+  // DAT glues a column-header label ("Trip" — the trip/miles column) onto the city
+  // text: "TripGonzales, CA" (glued) or "Trip Gonzales, CA" (spaced). Strip a known
+  // label prefix, but ONLY when a capitalized city word follows, so real cities like
+  // "Tripoli, IA" / "Milesburg, PA" (lowercase after the label) are never truncated.
+  // Shared by getCities (both branches) and flushExpand (consumer-side hardening).
+  const COL_LABEL = /^(?:Trip|Origin|Destination|Dest|Pickup|Delivery|Drop|Stop|Miles)(?=[A-Z]|\s+[A-Z])/;
+  const COL_LABEL_WORDS = ['Trip','Origin','Destination','Dest','Pickup','Delivery','Drop','Stop','Miles'];
+  function stripColLabel(s) { return String(s || '').replace(COL_LABEL, '').trim(); }
 
   // ── Send email via Gmail compose URL ──────────────────────────────────────
   async function sendEmail(brokerEmail, originRaw, destRaw, dateRaw = '', milesRaw = '') {
@@ -747,18 +999,27 @@ if (so && ro && so !== ro) return false;
     origin = origin.replace(/^\d+\s*/, '').trim();
     dest   = dest.replace(/^\d+\s*/, '').trim();
 
-    const LABEL_SKIP = /^(my account|origin|destination|filter|search)/i;
-    if (origin.length > 3 && dest.length > 3 && !LABEL_SKIP.test(dest) && !LABEL_SKIP.test(origin)) return { origin, dest };
+    // Strip a glued/spaced DAT column-header label (see COL_LABEL definition).
+    origin = stripColLabel(origin);
+    dest   = stripColLabel(dest);
 
-    // Fallback: regex scan on row text
+    const LABEL_SKIP = /^(my account|origin|destination|filter|search)/i;
+    if (origin.length > 3 && dest.length > 3 && !LABEL_SKIP.test(dest) && !LABEL_SKIP.test(origin)) {
+      return { origin, dest };
+    }
+
+    // Fallback: regex scan on row text. The greedy capture can swallow an adjacent
+    // column label ("Trip Gonzales") and the primary-branch strip above never ran
+    // on these tokens — so apply COL_LABEL here too, and exclude bare labels.
     const text = row.textContent;
     const CITY_RE = /\b([A-Za-z][A-Za-z\s\.]{1,22}),\s*([A-Z]{2})\b/g;
+    const SKIP_WORDS = ['Van','Full','Partial','Reefer','Flat','Step', ...COL_LABEL_WORDS];
     const cities = [];
     let m;
     CITY_RE.lastIndex = 0;
     while ((m = CITY_RE.exec(text)) !== null && cities.length < 2) {
-      const c = m[1].trim();
-      if (c.length >= 2 && !['Van','Full','Partial','Reefer','Flat','Step'].includes(c)) {
+      const c = stripColLabel(m[1].trim());
+      if (c.length >= 2 && !SKIP_WORDS.includes(c)) {
         cities.push(`${c}, ${m[2]}`);
       }
     }
@@ -1165,8 +1426,21 @@ if (so && ro && so !== ro) return false;
                      color:${n === gmailIndex ? '#fff' : '#6e6e73'}">${n}</button>`).join('')}
         </div>
         <div style="font-size:10px;color:#aeaeb2;line-height:1.5;margin-bottom:6px">Open your freight Gmail → check URL: mail.google.com/mail/<strong>u/1</strong>/</div>
-        <div id="dlm-setup-gmail-status" style="font-size:11px;font-weight:500;color:${gmailEmail ? '#34c759' : '#aeaeb2'}">
-          ${gmailEmail ? `✓ ${esc(gmailEmail)} · Account #${gmailIndex}` : 'Not configured yet'}
+        <div id="dlm-setup-gmail-status" style="font-size:11px;font-weight:500;color:${activeMailProvider === 'gmail' ? '#34c759' : '#aeaeb2'}">
+          ${activeMailProvider === 'gmail' ? `✓ Connected · ${esc(gmailEmail || 'Account #'+gmailIndex)}` : 'Not active'}
+        </div>
+      </div>
+
+      <div style="${CARD}">
+        <div style="${LABEL}">Outlook — Rate Confirmations</div>
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <input id="dlm-setup-outlook-input" type="text" value="${esc(outlookEmail)}" placeholder="Paste Outlook URL or your email"
+                 style="${INPUT};flex:1;min-width:0">
+          <button class="dlm-setup-outlook-save" style="${BTN}">Save</button>
+        </div>
+        <div style="font-size:10px;color:#aeaeb2;line-height:1.5;margin-bottom:6px">Opens your Outlook inbox — search the load # manually · using outlook.${outlookHost}</div>
+        <div id="dlm-setup-outlook-status" style="font-size:11px;font-weight:500;color:${activeMailProvider === 'outlook' ? '#34c759' : '#aeaeb2'}">
+          ${activeMailProvider === 'outlook' ? `✓ Connected${outlookEmail ? ' · '+esc(outlookEmail) : ''}` : 'Not active'}
         </div>
       </div>
 
@@ -1604,7 +1878,12 @@ if (so && ro && so !== ro) return false;
         showUndoToast(key, savedEntry);
       } else {
         const rec = _recPool[key];
-        if (rec) lovedLoads[key] = { record: rec, savedAt: Date.now() };
+        // Strip transient radius-search fields so the "~X mi off" distance tag
+        // doesn't leak into the Preferred tab, where it's out of context.
+        if (rec) {
+          const { _oGap, _dGap, ...cleanRec } = rec;
+          lovedLoads[key] = { record: cleanRec, savedAt: Date.now() };
+        }
         btn.classList.add('dlm-loved');
         btn.title = 'Remove from Preferred';
         chrome.storage.local.set({ lovedLoads });
@@ -1708,7 +1987,8 @@ if (so && ro && so !== ro) return false;
         } else if (raw && raw.includes('@')) {
           gmailEmail  = raw;
         }
-        await chrome.storage.local.set({ gmailEmail, gmailIndex });
+        activeMailProvider = 'gmail';   // saving Gmail makes it active, deactivates Outlook
+        await chrome.storage.local.set({ gmailEmail, gmailIndex, activeMailProvider });
         const el = document.getElementById('dlm-body');
         if (el && _activeTab === 'setup') renderSetupBody(el);
         return;
@@ -1716,14 +1996,22 @@ if (so && ro && so !== ro) return false;
       if (e.target.closest('.dlm-setup-acct-btn')) {
         const acctBtn = e.target.closest('.dlm-setup-acct-btn');
         gmailIndex = parseInt(acctBtn.dataset.gmailIdx, 10);
-        await chrome.storage.local.set({ gmailIndex });
-        document.querySelectorAll('.dlm-setup-acct-btn').forEach(b => {
-          const a = parseInt(b.dataset.gmailIdx) === gmailIndex;
-          b.style.background = a ? '#007aff' : 'rgba(0,0,0,.05)';
-          b.style.color      = a ? '#fff'    : '#6e6e73';
-        });
-        const st = document.getElementById('dlm-setup-gmail-status');
-        if (st) { st.textContent = `✓ ${gmailEmail || 'Account #'+gmailIndex} · Account #${gmailIndex}`; st.style.color = '#34c759'; }
+        activeMailProvider = 'gmail';   // selecting an account makes Gmail active
+        await chrome.storage.local.set({ gmailIndex, activeMailProvider });
+        // Full re-render so the Outlook box also drops its green "active" state.
+        const el = document.getElementById('dlm-body');
+        if (el && _activeTab === 'setup') renderSetupBody(el);
+        return;
+      }
+      if (e.target.closest('.dlm-setup-outlook-save')) {
+        const raw = document.getElementById('dlm-setup-outlook-input')?.value.trim() || '';
+        outlookHost = detectOutlookHost(raw);   // match the user's account → no re-login
+        if (raw && raw.includes('@')) outlookEmail = raw;
+        outlookConfigured = true;
+        activeMailProvider = 'outlook';  // saving Outlook makes it active, deactivates Gmail
+        await chrome.storage.local.set({ outlookEmail, outlookConfigured, outlookHost, activeMailProvider });
+        const el = document.getElementById('dlm-body');
+        if (el && _activeTab === 'setup') renderSetupBody(el);
         return;
       }
       const saveBtn = e.target.closest('.dlm-tpl-save');
@@ -1795,7 +2083,60 @@ if (so && ro && so !== ro) return false;
       chrome.storage.local.set({ emailTemplates: tmpls });
     }, true);
 
+    // Lane Lookup (radius) live update — delegated on #dlm-body so it survives
+    // every innerHTML replacement. Sliders debounce ~100ms (drag fires many
+    // events; re-running radiusMatch on a large CSV each tick would lag); text
+    // fields debounce 300ms. Only the results sub-div is re-rendered, so the
+    // controls keep focus and slider-drag state.
+    d.querySelector('#dlm-body').addEventListener('input', e => {
+      const isSlider = e.target.classList.contains('dlm-r-slider');
+      const isCity   = e.target.classList.contains('dlm-r-city');
+      if (!isSlider && !isCity) return;
+
+      // Live-update the mile labels immediately (cheap, no match work).
+      if (isSlider) {
+        const valEl = document.getElementById(e.target.id + '-val');
+        if (valEl) valEl.textContent = e.target.value + ' mi';
+      }
+
+      clearTimeout(_radiusTimer);
+      _radiusTimer = setTimeout(runRadiusUpdate, isSlider ? 100 : 300);
+    });
+
     return d;
+  }
+
+  // Re-run the radius search from the current control values and patch only the
+  // results sub-div. Keeps panelBodyHTML's cached radius section in sync so the
+  // floating window / tab re-renders show the latest results.
+  function runRadiusUpdate() {
+    const oEl  = document.getElementById('dlm-r-origin');
+    const dEl  = document.getElementById('dlm-r-dest');
+    const omEl = document.getElementById('dlm-r-origin-mi');
+    const dmEl = document.getElementById('dlm-r-dest-mi');
+    const resEl = document.getElementById('dlm-radius-results');
+    if (!resEl) return;
+
+    const origin = oEl ? oEl.value.trim() : '';
+    const dest   = dEl ? dEl.value.trim() : '';
+    const originMi = omEl ? parseInt(omEl.value, 10) : _radiusOriginMi;
+    const destMi   = dmEl ? parseInt(dmEl.value, 10) : _radiusDestMi;
+
+    // Persist so the chosen radii stick across load-row switches + panel rebuilds
+    // (module-scope = live default; storage = survives page reload).
+    _radiusOriginMi = originMi;
+    _radiusDestMi   = destMi;
+    chrome.storage.local.set({ dlmRadiusOriginMi: originMi, dlmRadiusDestMi: destMi });
+
+    const html = renderRadiusResults(origin, dest, originMi, destMi);
+    resEl.innerHTML = html;
+
+    // Keep the cached body HTML's results in sync (used by tab/window re-renders).
+    const secEl = document.getElementById('dlm-radius-section');
+    if (secEl) {
+      const bodyEl = document.getElementById('dlm-body');
+      if (bodyEl) panelBodyHTML = bodyEl.innerHTML;
+    }
   }
 
   function clearPanel() {
@@ -1807,41 +2148,18 @@ if (so && ro && so !== ro) return false;
     if (!panelPopped) panel.style.display = 'none';
   }
 
-  function showEmptyPanel(origin, dest) {
-    if (!panel) panel = buildPanel();
-    if (!panelPopped) panel.style.display = 'flex';
-    switchTab('history');
-    const html = `<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">No matching records for this lane</div>`;
-    panelBodyHTML = html;
-    const bodyEl = document.getElementById('dlm-body');
-    if (bodyEl) { bodyEl.innerHTML = html; bodyEl.scrollTop = 0; }
-  }
-
   function showPanel(origin, dest, odM, oM, bM, datBroker) {
-    // Only persist state when the pop-out window is actually open — avoids a
-    // large storage write (full match arrays) on every row click otherwise.
-    if (panelPopped) chrome.storage.local.set({ panelState: { origin, dest, odM, oM, bM, datBroker } });
-
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
     switchTab('history');
-
-    const pri = odM.length ? odM : oM.length ? oM : bM;
-    const st = calcStats(pri);
-    const arrow = dest ? `<span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(dest)}` : '';
-
-    let html = `
-      <div class="dlm-sum">
-        <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Current Load</div>
-        <div class="dlm-lane">${esc(origin)}${arrow}</div>
-        <div class="dlm-stats">
-          <div><div class="dlm-sv">${st.count}</div><div class="dlm-sl">Bookings</div></div>
-          <div><div class="dlm-sv">${st.avg}</div><div class="dlm-sl">Avg Rate</div></div>
-          <div><div class="dlm-sv">${st.best}</div><div class="dlm-sl">Best Rate</div></div>
-        </div>
-      </div>`;
 
     const lk = new Set(Object.keys(lovedLoads));
+
+    // Lane Lookup (radius) is the top/primary section. The old "Current Load" box
+    // was removed — it showed the broad same-origin average (noise) that the
+    // scoped Lane Lookup summary already replaces.
+    let html = renderRadiusSection(origin, dest, _radiusOriginMi, _radiusDestMi);
+
     if (odM.length) {
       // skipAnim=true: all records use animation-delay:0 so none are hidden during a
       // stagger delay. The .dlm-rec CSS animation still runs (opacity 0→1) but fires
@@ -1856,15 +2174,17 @@ if (so && ro && so !== ro) return false;
       if (brokerLane.length) html += `<div class="dlm-stitle" style="color:#af52de">Same Broker — ${esc(datBroker)}</div>`;
     }
 
-    // Blue: same origin city only
-    if (!odM.length && oM.length) {
-      html += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lk, datBroker);
-    } else if (odM.length && oM.length) {
-      const originOnly = oM.filter(r => !odM.find(o => o.loadNum === r.loadNum));
-      if (originOnly.length) html += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lk, datBroker);
-    }
-
     panelBodyHTML = html;
+
+    // Unified render: ship the SAME html content.js built to the popped-out
+    // window so panel.js just displays it (never re-renders cities itself).
+    // mode:'html' → panel.js takes the inject branch; odM/oM/bM let panel.js
+    // rebuild its _recPool so heart/save-to-Preferred works on injected cards.
+    // Only write when popped — avoids a storage write on every docked row click.
+    if (panelPopped) chrome.storage.local.set({
+      panelState: { origin, dest, mode: 'html', renderedHTML: html, odM, oM, bM, datBroker }
+    });
+
     const searchEl = panel.querySelector('#dlm-search');
     if (searchEl && searchEl.value) {
       searchEl.value = '';
@@ -1886,6 +2206,35 @@ if (so && ro && so !== ro) return false;
   // The unicode → arrow is unique to route headers so false-positives are rare.
   const ROUTE_RE = /([A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2})\s*→\s*([A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2})/;
 
+  // Stricter route regex for reading the detail node's full innerText: the city
+  // char class is [A-Za-z .] (NO \s), so the origin capture cannot cross a
+  // newline into a preceding badge element (DAT renders "Tracking Required",
+  // "CARB", etc. as separate elements → newline-separated in innerText). Spaces
+  // are still allowed, so multi-word cities (Moss Landing, W Springfield) survive.
+  const DETAIL_ROUTE_RE = /([A-Z][A-Za-z .]{1,28},\s*[A-Z]{2})\s*→\s*([A-Z][A-Za-z .]{1,28},\s*[A-Z]{2})/;
+
+  // ── Allowlist validator: a candidate must parse to "City, ST" with a REAL
+  // state code. Anchors on the comma + a valid 2-letter state and captures the
+  // FULL city token sequence before the comma, so multi-word cities (Moss
+  // Landing, W Springfield, Colorado Spgs, Miles City) survive intact. Returns
+  // the normalized "City, ST" or null. Used to vet the clean detail-panel
+  // sources in flushExpand before trusting them.
+  const US_STATES = new Set(['AL','AK','AZ','AR','CA','CO','CT','DE','DC','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']);
+  function validCityST(raw) {
+    const s = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!s) return null;
+    const re = /([A-Za-z][A-Za-z .'\-]{0,40}?),\s*([A-Za-z]{2})\b/g;
+    let m;
+    while ((m = re.exec(s)) !== null) {
+      const st = m[2].toUpperCase();
+      if (US_STATES.has(st)) {
+        const city = m[1].trim();
+        if (city.length >= 2) return `${city}, ${st}`;
+      }
+    }
+    return null;
+  }
+
   async function showPanelDual(origin, dest, odM, oM, bM, datBroker, detailNode) {
     const mySeq = ++_panelSeq;
     if (!panel) panel = buildPanel();
@@ -1896,31 +2245,18 @@ if (so && ro && so !== ro) return false;
 
 
     // --- CSV section ---
-    const pri = odM.length ? odM : oM.length ? oM : bM;
-    const st = calcStats(pri);
-    const arrow = dest ? `<span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(dest)}` : '';
-
-    let csvHTML = `
-      <div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:10px 14px 6px;font-weight:600">📁 From Your CSV</div>
-      <div class="dlm-sum">
-        <div class="dlm-lane">${esc(origin)}${arrow}</div>
-        <div class="dlm-stats">
-          <div><div class="dlm-sv">${st.count}</div><div class="dlm-sl">Bookings</div></div>
-          <div><div class="dlm-sv">${st.avg}</div><div class="dlm-sl">Avg Rate</div></div>
-          <div><div class="dlm-sv">${st.best}</div><div class="dlm-sl">Best Rate</div></div>
-        </div>
-      </div>`;
-
     const lkd = new Set(Object.keys(lovedLoads));
+
+    // Lane Lookup (radius) is the top/primary section. The old "Current Load"
+    // stats box was removed (broad same-origin average = noise the scoped Lane
+    // Lookup summary already replaces). The "📁 From Your CSV" label is kept to
+    // delineate the CSV section from the "🗄️ LaneIQ Database" section below.
+    let csvHTML = renderRadiusSection(origin, dest, _radiusOriginMi, _radiusDestMi);
+    csvHTML += `<div style="font-size:10px;color:#aeaeb2;letter-spacing:.05em;text-transform:uppercase;margin:10px 14px 6px;font-weight:600">📁 From Your CSV</div>`;
+
     if (odM.length) {
       csvHTML += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
                  renderRecs(odM, odM.length >= 3 ? '#34c759' : '#f5a623', 20, true, true, lkd, datBroker);
-    }
-    if (!odM.length && oM.length) {
-      csvHTML += `<div class="dlm-stitle">Same Origin · ${oM.length} loads</div>` + renderRecs(oM, '#007aff', 999, true, true, lkd, datBroker);
-    } else if (odM.length && oM.length) {
-      const originOnly = oM.filter(r => !odM.find(x => x.loadNum === r.loadNum));
-      if (originOnly.length) csvHTML += `<div class="dlm-stitle">Other Loads from This Origin · ${originOnly.length}</div>` + renderRecs(originOnly, '#007aff', 999, true, true, lkd, datBroker);
     }
 
     const dbLoadingHTML = `
@@ -1977,17 +2313,8 @@ if (so && ro && so !== ro) return false;
       result = { exact: result.loadCount > 0 ? { count: result.loadCount, avgRate: result.avgRate, minRate: result.minRate, maxRate: result.maxRate, loads: [] } : null, origin: null };
     }
 
-    const fmt = n => (n != null && !isNaN(n))
-      ? '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
-      : 'N/A';
-
-    const statsBlock = data => `
-      <div class="dlm-stats">
-        <div><div class="dlm-sv">${data.count}</div><div class="dlm-sl">Loads</div></div>
-        <div><div class="dlm-sv">${fmt(data.avgRate)}</div><div class="dlm-sl">Avg Rate</div></div>
-        <div><div class="dlm-sv">${data.maxRate > 25000 ? 'N/A' : fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
-      </div>`;
-
+    // DB rate stats (Loads/Avg/Best/Min) removed — the database aggregates are
+    // inaccurate. Section headers + cards stay; only the stats row is gone.
     const mapLoads = loads => (loads || []).map(l => ({
       loadNum: '', puDate: l.pu_date ? l.pu_date.toString().slice(0, 10) : '',
       broker: '', rate: l.rate != null ? String(l.rate) : '',
@@ -2002,14 +2329,16 @@ if (so && ro && so !== ro) return false;
       dbHTML += `<div style="text-align:center;padding:20px;color:#aeaeb2;font-size:13px">No database data found for this lane</div>`;
     } else {
       if (result.exact) {
-        dbHTML += `<div class="dlm-sum"><div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>${statsBlock(result.exact)}${renderRecs(mapLoads(result.exact.loads), '#34c759', 999, true, true, new Set(), datBroker)}</div>`;
+        dbHTML += `<div class="dlm-sum"><div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>${renderRecs(mapLoads(result.exact.loads), '#34c759', 999, true, true, new Set(), datBroker)}</div>`;
       }
       if (result.origin) {
-        dbHTML += `<div class="dlm-sum" style="margin-top:8px"><div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>${statsBlock(result.origin)}${renderRecs(mapLoads(result.origin.loads), '#007aff', 999, true, true, new Set(), datBroker)}</div>`;
+        dbHTML += `<div class="dlm-sum" style="margin-top:8px"><div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>${renderRecs(mapLoads(result.origin.loads), '#007aff', 999, true, true, new Set(), datBroker)}</div>`;
       }
     }
 
     if (_panelSeq !== mySeq) return;
+    // Lane Lookup already lives in csvHTML (under Current Load); the DB section
+    // replaces only its own loading placeholder below it.
     const dbSection = document.getElementById('dlm-db-section');
     if (dbSection) {
       dbSection.outerHTML = dbHTML;
@@ -2111,24 +2440,14 @@ if (so && ro && so !== ro) return false;
       return;
     }
 
-    const fmt = n => (n != null && !isNaN(n))
-      ? '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
-      : 'N/A';
+    // DB rate stats (Loads/Avg/Best/Min) removed — the database aggregates are
+    // inaccurate. Section headers + cards stay; only the stats row is gone.
 
-    function statsBlock(data) {
-      return `
-        <div class="dlm-stats">
-          <div><div class="dlm-sv">${data.count}</div><div class="dlm-sl">Loads</div></div>
-          <div><div class="dlm-sv">${fmt(data.avgRate)}</div><div class="dlm-sl">Avg Rate</div></div>
-          <div><div class="dlm-sv">${data.maxRate > 25000 ? 'N/A' : fmt(data.maxRate)}</div><div class="dlm-sl">Best Rate</div></div>
-        </div>
-        <div class="dlm-stats" style="margin-top:6px">
-          <div><div class="dlm-sv">${fmt(data.minRate)}</div><div class="dlm-sl">Min Rate</div></div>
-        </div>`;
-    }
-
-    const arrow = dest ? `<span style="color:#aeaeb2;margin:0 5px;font-weight:300">→</span>${esc(dest)}` : '';
-    let html = `<div class="dlm-lane" style="padding:10px 14px 4px">${esc(origin)}${arrow}</div>`;
+    // Lane Lookup (radius) is a CSV feature — intentionally NOT rendered in
+    // DB-only mode. (Previously appended renderRadiusSection here, which only
+    // half-disappeared by relying on an empty oIndex returning ''. Removed so
+    // DB-only never shows Lane Lookup even if a stale oIndex is present.)
+    let html = '';
 
     if (result.exact) {
       const mappedLoads = (result.exact.loads || []).map(l => ({
@@ -2147,7 +2466,6 @@ if (so && ro && so !== ro) return false;
       html += `
         <div class="dlm-sum">
           <div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>
-          ${statsBlock(result.exact)}
           ${renderRecs(mappedLoads, mappedLoads.length >= 3 ? '#34c759' : '#f5a623', 999, true, true)}
         </div>`;
     }
@@ -2169,7 +2487,6 @@ if (so && ro && so !== ro) return false;
       html += `
         <div class="dlm-sum" style="margin-top:8px">
           <div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>
-          ${statsBlock(result.origin)}
           ${renderRecs(mappedOriginLoads, '#007aff', 999, true, true)}
         </div>`;
     }
@@ -2221,8 +2538,14 @@ if (so && ro && so !== ro) return false;
       const ln   = String(r.loadNum||'').replace(/\n.*/,'').trim() || '—';
       const dt   = String(r.puDate||'').split('T')[0].substring(0, 10);
       const broker = String(r.broker||'').trim();
-      const gUrl = (ln !== '—' && !(useDB && !useCSV)) ? gmailUrl(ln) : null;
-      const gmailBtn = gUrl ? `<a href="${gUrl}" target="_blank" class="dlm-gmail-btn">📧 Gmail</a>` : '';
+      // Exactly ONE mail button — the ACTIVE provider, when configured. Mutually
+      // exclusive (never both). Same DB-only guard + load# check.
+      const _canMail   = ln !== '—' && !(useDB && !useCSV);
+      const gmailCfg   = gmailIndex > 0 || !!gmailEmail;
+      const showGmail   = _canMail && activeMailProvider === 'gmail'   && gmailCfg;
+      const showOutlook = _canMail && activeMailProvider === 'outlook' && outlookConfigured;
+      const gmailBtn   = showGmail   ? `<a href="${gmailUrl(ln)}" target="_blank" rel="noopener" class="dlm-gmail-btn">📧 Gmail</a>` : '';
+      const outlookBtn = showOutlook ? `<a href="${outlookUrl(ln)}" target="_blank" rel="noopener" class="dlm-outlook-btn">📧 Outlook</a>` : '';
       const heartBtn = `<button class="dlm-heart-btn${loved ? ' dlm-loved' : ''}" data-load-key="${esc(key)}" title="${loved ? 'Remove from Preferred' : 'Save to Preferred'}">♥</button>`;
       const noteBadgeBtn = loved ? `<button class="dlm-note-badge" data-note-key="note_${esc(key)}" data-load-key="${esc(key)}" title="Add note"><svg width="9" height="9" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;margin-bottom:1px"><path d="M9.5 2L12 4.5L4.5 12H2V9.5L9.5 2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>Note</button>` : '';
 
@@ -2230,19 +2553,27 @@ if (so && ro && so !== ro) return false;
       const deliveryAddr = parseCompanyAddress(r.deliveryCompany || '');
       const commodity = String(r.commodity || '').trim();
 
+      // Trailer/equipment tag (CSV only; DB records have no trailer field).
+      // Hidden entirely when blank/"nan"/missing — never shows N/A.
+      const trailer = String(r.trailer || '').trim();
+      const trailerTag = (trailer && trailer.toLowerCase() !== 'nan')
+        ? `<span class="dlm-eq">${esc(trailer)}</span>` : '';
+
       const addrHtml = (addr) =>
         addr ? `${esc(addr.company)}${addr.street ? `<br><span style="font-size:10px;color:#8e8e93;font-weight:400">${esc(addr.street)}</span>` : ''}` : '';
 
       const isBrokerMatch = normDatB && r.broker && normBroker(r.broker).includes(normDatB);
       const cardColor = isBrokerMatch ? '#9b59b6' : color;
+
       return `
         <div class="dlm-rec" style="border-left-color:${cardColor};animation-delay:${skipAnim ? 0 : i*.04}s">
           <div class="dlm-rh">
             <div style="display:flex;flex-direction:column;gap:2px;max-width:165px">
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
+              ${trailerTag}
             </div>
-            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
+            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${outlookBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
           <div class="dlm-grid">
             <div class="dlm-k">Rate</div><div class="dlm-v dlm-rate">${esc(rd)}</div>
@@ -2449,7 +2780,12 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider']);
+
+    if (Number.isFinite(s.dlmRadiusOriginMi)) _radiusOriginMi = s.dlmRadiusOriginMi;
+    if (Number.isFinite(s.dlmRadiusDestMi))   _radiusDestMi   = s.dlmRadiusDestMi;
+
+    if (s['dlm-route-modal-rect']) _routeModalRect = s['dlm-route-modal-rect'];
 
     // Resolve tier/dataSource early so we can use them in the guards below
     licenseTier = s.licenseTier || 'solo';
@@ -2485,6 +2821,10 @@ if (so && ro && so !== ro) return false;
       oIndex      = s.oIndex      || {};
       brokerIndex = s.brokerIndex || {};
     }
+
+    // v1.32 radius matching — load bundled coords + log real-world coverage (dev aid)
+    await loadCityCoords();
+    logCoordCoverage();
 
     gmailIndex       = s.gmailIndex      || 0;
     gmailOAuthEmail  = s.gmailOAuthEmail || '';
@@ -2523,6 +2863,10 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     dlmDriverRate  = +s.dlmDriverRate  || 0;
     lovedLoads          = s.lovedLoads      || {};
     gmailEmail          = s.gmailEmail      || '';
+    outlookEmail        = s.outlookEmail    || '';
+    outlookConfigured   = !!s.outlookConfigured;
+    outlookHost         = s.outlookHost     || 'office.com';
+    activeMailProvider  = s.activeMailProvider || '';
     filesMeta           = s.filesMeta       || [];
     emailTemplates      = s.emailTemplates  || DEFAULT_TEMPLATES.map(t => ({...t}));
     activeTemplateIndex = s.activeTemplate  ?? 0;
@@ -2867,28 +3211,61 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
 
         node.dataset.dlmExpandSeen = '1';
 
-        let o = row?.dataset.dlmOrigin;
-        let d = row?.dataset.dlmDest   || '';
         const b = row?.dataset.dlmBroker || '';
 
-        // If no processed row data, or destination is missing, try to scrape cities
-        // from the detail node or the clicked row element itself.
-        if (!o || !d) {
-          // Strategy 1: city-state-container elements inside the detail node
-          let scope = node;
-          let cityEls = scope.querySelectorAll('[class*="city-state-container"]');
-          if (cityEls.length < 2) {
+        // ── STEP 1: prefer the CLEAN detail-panel source. The detail `node` is
+        // guaranteed present here (it triggered this handler), so we read the
+        // city from a dedicated ELEMENT rather than scraping raw text — unlike
+        // dlmOrigin / the row-cell scrape, which the no-match path otherwise falls
+        // through to (badge-laden text, e.g. "Required Pueblo, CO"). Each clean
+        // candidate must validate to a real "City, ST"; clean-source values are
+        // trusted as-is (NOT run through stripColLabel — that's also what keeps
+        // "Miles City, MT" from being truncated).
+        let o = '', d = '', oClean = false, dClean = false;
+
+        // 1a. city-state-container elements — PRIMARY. Verified DOM: each holds
+        // ONLY the city/comma/state spans (div.city-state-container, siblings
+        // inside div.orig-dest-container); badges render as SIBLINGS at the
+        // orig-dest level, never as children. So the element's innerText is
+        // always a clean "City, ST" — badge-proof, same-line or not.
+        // cityEls[0]=origin, cityEls[1]=dest (document order).
+        {
+          let cityEls = node ? node.querySelectorAll('[class*="city-state-container"]') : [];
+          if (cityEls.length < 2 && node) {
             let ancestor = node.parentElement;
             for (let i = 0; i < 5 && ancestor && ancestor !== document.body; i++) {
               const found = ancestor.querySelectorAll('[class*="city-state-container"]');
-              if (found.length >= 2) { scope = ancestor; cityEls = found; break; }
+              if (found.length >= 2) { cityEls = found; break; }
               ancestor = ancestor.parentElement;
             }
           }
-          if (!o && cityEls.length >= 2) o = cityEls[0].innerText.trim();
-          if (!d && cityEls.length >= 2) d = cityEls[1].innerText.trim();
-          // Strategy 2: walk UP from the detail node to find the parent load row
-          if ((!o || !d) && node) {
+          if (cityEls.length >= 2) {
+            const co = validCityST(cityEls[0].innerText), cd = validCityST(cityEls[1].innerText);
+            if (co) { o = co; oClean = true; }
+            if (cd) { d = cd; dClean = true; }
+          }
+        }
+        // 1b. DETAIL_ROUTE_RE on the detail node — SECONDARY, for when the
+        // container is absent. Arrow-ordered "City, ST → City, ST" with a
+        // no-newline city class so a badge element on a prior line can't bleed in.
+        if ((!o || !d) && node) {
+          const m = DETAIL_ROUTE_RE.exec(node.innerText || '');
+          if (m) {
+            const co = validCityST(m[1]), cd = validCityST(m[2]);
+            if (!o && co) { o = co; oClean = true; }
+            if (!d && cd) { d = cd; dClean = true; }
+          }
+        }
+
+        // ── STEP 3 fallback: only when a clean source didn't yield a valid
+        // City,ST. Use the stamped dataset (clean when the load matched) / the
+        // row-cell scrape, then stripColLabel as the thin safety net (kept here
+        // ONLY — do not expand it).
+        if (!o) o = row?.dataset.dlmOrigin || '';
+        if (!d) d = row?.dataset.dlmDest   || '';
+        if (!o || !d) {
+          // Legacy greedy cityPattern on an ancestor's innerText.
+          if (node) {
             let candidate = node.parentElement;
             for (let i = 0; i < 8 && candidate; i++) {
               if ((!o || !d) && i >= 4) {
@@ -2904,17 +3281,16 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
               candidate = candidate.parentElement;
             }
           }
-          // Strategy 3: ROUTE_RE — try the detail node first (the → arrow lives there),
-          // then fall back to the clicked row element.
-          if ((!o || !d) && (node || row)) {
-            const src = (node ? node.innerText : '') || (row ? row.innerText || row.textContent : '') || '';
-            const m = ROUTE_RE.exec(src);
-            if (m) {
-              if (!o) o = m[1].trim();
-              if (!d) d = m[2].trim();
-            }
+          // Legacy ROUTE_RE on the clicked row element (node already tried above).
+          if ((!o || !d) && row) {
+            const m = ROUTE_RE.exec(row.innerText || row.textContent || '');
+            if (m) { if (!o) o = m[1].trim(); if (!d) d = m[2].trim(); }
           }
         }
+        // stripColLabel + cleanCity ONLY on fallback-sourced values — clean
+        // detail-source values are already validated and must not be re-stripped.
+        if (o && !oClean) o = cleanCity(stripColLabel(o));
+        if (d && !dClean) d = cleanCity(stripColLabel(d));
 
         const expandKey = `${o}|${d}`;
         const now = Date.now();
@@ -2938,11 +3314,11 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
           const odM = d ? findOD(o, d) : [];
           const oM  = findO(o);
           const bM  = b ? findBroker(b, o) : [];
-          if (odM.length || oM.length || bM.length) {
-            showPanel(o, d, odM, oM, bM, b);
-          } else {
-            showEmptyPanel(o, d);
-          }
+          // Always render the full panel (Current Load + Lane Lookup), even with
+          // zero direct history — radiusMatch can still surface nearby-origin
+          // lanes that exact/same-origin lookups miss. (Previously zero-match
+          // rows hit showEmptyPanel, which skipped Lane Lookup entirely.)
+          showPanel(o, d, odM, oM, bM, b);
         } else {
           clearPanel();
         }
@@ -2951,6 +3327,22 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     }
 
     let _rt;
+    // A+B: inject the route buttons into a freshly-inserted detail panel
+    // immediately, retrying briefly until DAT renders the "View Route" control.
+    // tryIntercept is idempotent (dataset.dlmRouteOk guard), so re-running on
+    // each retry tick is safe. ~50ms × 10 ≈ 500ms cap.
+    function interceptInNode(root, attempt = 0) {
+      if (!root || !root.isConnected) return;
+      let found = false;
+      root.querySelectorAll('button,a,[role="button"]').forEach(b => {
+        if (/view\s*route/i.test((b.textContent || '').replace(/\s+/g, ' ').trim())) found = true;
+        tryIntercept(b);
+      });
+      if (!found && attempt < 10) {
+        setTimeout(() => interceptInNode(root, attempt + 1), 50);
+      }
+    }
+
     new MutationObserver(mutations => {
       for (const { addedNodes, removedNodes } of mutations) {
         for (const node of addedNodes) {
@@ -2968,9 +3360,10 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
             ? node.className
             : node.className?.baseVal || '').toLowerCase();
           if (cls.includes('details-container') || cls.includes('dat-load-details')) {
-            console.log('[LaneIQ] queued expansion node, class:', cls);
-            console.log('[LaneIQ] detail node HTML:', node.innerHTML.substring(0, 2000));
             _pendingExpand.add(node);
+            // A+B: inject route buttons into this detail panel now (with a short
+            // bounded retry) rather than waiting on the global 250ms rescan below.
+            interceptInNode(node);
           }
         }
 
@@ -3131,11 +3524,14 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
   }
 
   function getDetailRate(fromEl) {
-    // Walk up to the stamped row element, then query only DAT's own rate
-    // elements — never LaneIQ's injected DOM (dlm- prefixed classes).
+    // Pull the broker's POSTED rate for this load — match or NOT. We must not
+    // depend on the row being "stamped" (dataset.dlmOrigin): no-match loads are
+    // never stamped, yet they still have a posted rate. So we scope extraction
+    // to the stamped row when available, else to the nearest row/detail
+    // container.
     //
-    // Skip elements inside DAT iQ / market-rate / estimate containers — those
-    // show projected prices (Spot, Contract, Avg), not the broker's posted rate.
+    // Skip DAT iQ / market-rate / estimate containers — those show projected
+    // prices (Spot, Contract, Avg), not the broker's posted rate.
     const SKIP_CONTAINER =
       '[class*="iq"],[class*="Iq"],[class*="IQ"],' +
       '[class*="market"],[class*="Market"],' +
@@ -3145,37 +3541,64 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       '[class*="suggest"],[class*="Suggest"],' +
       '[class*="average"],[class*="Average"]';
 
+    // Extract the first "$…" posted rate within a scope, skipping projections.
+    const extractFrom = (scope) => {
+      const candidates = Array.from(
+        scope.querySelectorAll(
+          '[class*="rate"],[class*="Rate"],[class*="price"],[class*="Price"],' +
+          '[class*="total"],[class*="Total"]'
+        )
+      ).filter(el => {
+        if (/\bdlm-/.test(el.className) || el.closest('[id^="dlm-"]')) return false;
+        if (el.closest(SKIP_CONTAINER)) return false;
+        return true;
+      });
+      for (const el of candidates) {
+        const text = el.textContent.trim();
+        // "–" / "—" means the broker has not posted a rate — leave field empty.
+        if (!text || /^[–—\-\s]+$/.test(text)) continue;
+        // Must START with "$" — rejects DAT iQ labels like "Spot $2,150".
+        if (!text.startsWith('$')) continue;
+        // Capture ONLY the primary grouped dollar amount. \d{1,3}(?:,\d{3})*
+        // stops at a thousands boundary, so a rate cell whose text runs straight
+        // into the trip-miles column ("$1,400" + "763" → "$1,400763") yields
+        // "1,400" (= 1400), never "1400763". A plain run like "850763" likewise
+        // caps at the first 1–3 digits ("850").
+        const m = text.match(/^\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)/);
+        if (!m) continue;
+        // Skip the "$X.XX/mi" per-mile subtext (a '/' immediately follows it).
+        if (text.slice(m[0].length).trimStart().startsWith('/')) continue;
+        const v = parseFloat(m[1].replace(/,/g, ''));
+        if (v > 0) return v;
+      }
+      return null;
+    };
+
+    // Strategy 1: the stamped row (matched / DB loads).
     let node = fromEl;
     while (node && node !== document.body) {
       if (node.dataset.dlmOrigin) {
-        const candidates = Array.from(
-          node.querySelectorAll(
-            '[class*="rate"],[class*="Rate"],[class*="price"],[class*="Price"],' +
-            '[class*="total"],[class*="Total"]'
-          )
-        ).filter(el => {
-          if (/\bdlm-/.test(el.className) || el.closest('[id^="dlm-"]')) return false;
-          if (el.closest(SKIP_CONTAINER)) return false;
-          return true;
-        });
-
-        for (const el of candidates) {
-          const text = el.textContent.trim();
-          // "–" / "—" means the broker has not posted a rate — leave field empty.
-          if (!text || /^[–—\-\s]+$/.test(text)) continue;
-          // Require text to START with "$" — this rejects DAT iQ labels like
-          // "Spot $2,150" or "Est $1,800" where the dollar sign is not first.
-          const m = text.match(/^\$\s*([\d,]+(?:\.\d{1,2})?)/);
-          if (m) {
-            const v = parseFloat(m[1].replace(/,/g, ''));
-            if (v > 0) return v;
-          }
-        }
-        return 0; // no broker-posted rate found — leave field blank
+        const v = extractFrom(node);
+        if (v != null) return v;
+        break;  // stop — fall through to the container fallback below
       }
       node = node.parentElement;
     }
-    return 0;
+
+    // Strategy 2: nearest row/detail container (no-match loads — never stamped).
+    node = fromEl;
+    for (let i = 0; i < 8; i++) {
+      node = node?.parentElement;
+      if (!node || node === document.body) break;
+      const cls = (node.className || '').toString().toLowerCase();
+      const isRow = node.matches && node.matches('[class*="row-container"],[class*="row-cells"],[data-test*="row"]');
+      if (isRow || cls.includes('load') || cls.includes('detail') ||
+          cls.includes('panel') || cls.includes('drawer') || cls.includes('card')) {
+        const v = extractFrom(node);
+        if (v != null) return v;
+      }
+    }
+    return 0; // genuinely no posted rate → leave the Rate field blank
   }
 
   function getDetailDate(fromEl) {
@@ -3193,15 +3616,20 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
   }
 
   // ── Route modal ──────────────────────────────────────────────────────────────
+  // ── Route modal (tabbed: multiple routes, switchable) ───────────────────────
   function showRouteModal(origin, dest, rate, onClose = null) {
+    // Already open → add a tab instead of rebuilding the shell.
+    if (_routeModal && document.body.contains(_routeModal.box)) {
+      _routeModal.openTab(origin, dest, rate);
+      return;
+    }
+    // Tear down any stale prior modal cleanly before building a fresh shell.
+    if (_routeModalTeardown) { _routeModalTeardown(); _routeModalTeardown = null; }
     document.getElementById('dlm-route-modal')?.remove();
 
+    // ===== SHELL (built once per modal) =====
     const wrap = document.createElement('div');
     wrap.id = 'dlm-route-modal';
-
-    // ── Header ────────────────────────────────────────────────────────────────
-    const hdr = document.createElement('div');
-    hdr.className = 'dlm-modal-overlay';
 
     const box = document.createElement('div');
     box.className = 'dlm-modal';
@@ -3209,19 +3637,38 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
 
     const mhdr = document.createElement('div');
     mhdr.className = 'dlm-modal-hdr';
-    mhdr.innerHTML = `
-      <div class="dlm-modal-hdr-title">
-        ${esc(origin || '—')}<span>→</span>${esc(dest || '—')}
-      </div>`;
+    const titleEl = document.createElement('div');
+    titleEl.className = 'dlm-modal-hdr-title';   // mirrors the active tab's lane
+    mhdr.appendChild(titleEl);
+    const minBtn = document.createElement('button');
+    minBtn.className = 'dlm-modal-min';
+    minBtn.title = 'Minimize';
+    minBtn.textContent = '—';
     const closeBtn = document.createElement('button');
     closeBtn.className = 'dlm-modal-close';
     closeBtn.title = 'Close (Esc)';
     closeBtn.textContent = '✕';
-    mhdr.appendChild(closeBtn);
+    const hdrActions = document.createElement('div');
+    hdrActions.style.cssText = 'display:flex;align-items:center;gap:6px;flex-shrink:0;';
+    hdrActions.append(minBtn, closeBtn);
+    mhdr.appendChild(hdrActions);
 
-    // ── Body ──────────────────────────────────────────────────────────────────
-    const mbody = document.createElement('div');
-    mbody.className = 'dlm-modal-body';
+    const tabStrip = document.createElement('div');
+    tabStrip.className = 'dlm-modal-tabs';
+    const bodyHost = document.createElement('div');
+    bodyHost.className = 'dlm-modal-panes';
+    box.append(mhdr, tabStrip, bodyHost);
+    wrap.append(box);
+
+    // ===== Per-route pane factory =====
+    // q() is scoped to mbody (this pane), NOT box, so multiple panes never
+    // cross-read each other's [data-dlm] inputs. The DH origin watcher is
+    // started only in activate() and stopped in deactivate()/destroy().
+    function buildPane(origin, dest, rate) {
+      // ── Body ────────────────────────────────────────────────────────────────
+      const mbody = document.createElement('div');
+      mbody.className = 'dlm-modal-body';
+      mbody.style.display = 'none';
 
     // Left: map
     const left = document.createElement('div');
@@ -3402,12 +3849,9 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       </div>`;
 
     mbody.append(left, right);
-    box.append(mhdr, mbody);
-    wrap.append(hdr, box);
-    document.body.appendChild(wrap);
 
-    // ── Live calculator ────────────────────────────────────────────────────────
-    function q(attr) { return box.querySelector(`[data-dlm="${attr}"]`); }
+    // ── Live calculator (q scoped to THIS pane's mbody, not box) ─────────────
+    function q(attr) { return mbody.querySelector(`[data-dlm="${attr}"]`); }
 
     function calc() {
       const rateV      = parseFloat(q('rate')?.value)       || 0;
@@ -3473,34 +3917,267 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       }).catch(() => { if (dhDistEl) dhDistEl.textContent = '—'; });
     }
 
-    // ── DH From: manual typing → debounced fetch (independent of Rate logic) ────
+    // ── DH From: manual typing → debounced fetch ──────────────────────────────
+    // dhResolved gates the origin watcher: once the field is set (auto or by
+    // the user) we don't re-watch on re-activate, and never clobber a manual edit.
     let _dhDebounce = null;
-    let stopOriginWatch = () => {};          // no-op until getDATOriginValue runs
+    let stopOriginWatch = () => {};   // no-op until activate() starts the watcher
+    let dhResolved = false;
     const dhFromEl = q('dh-from');
     if (dhFromEl) {
-      // Manual edits to the DH From field
-      dhFromEl.addEventListener('change', fetchDHRoute);
+      dhFromEl.addEventListener('change', () => { dhResolved = true; fetchDHRoute(); });
       dhFromEl.addEventListener('input', () => {
+        dhResolved = true;
         clearTimeout(_dhDebounce);
         _dhDebounce = setTimeout(fetchDHRoute, 800);
       });
-
-      // ── getDATOriginValue: watch DAT's Origin search box and auto-fill DH From ──
-      // Called every time the modal opens. Runs independently of the Rate field.
-      // Disconnects its MutationObserver the moment the input is found.
-      // Will override the pre-fill above if/when a real DAT input becomes readable.
-      stopOriginWatch = getDATOriginValue(dhFromEl, () => fetchDHRoute());
     }
 
-    // ── Close handlers ─────────────────────────────────────────────────────────
-    const doClose = () => { wrap.remove(); stopOriginWatch(); if (onClose) onClose(); };
-    closeBtn.addEventListener('click', doClose);
-    hdr.addEventListener('click', doClose);           // click outside box closes
-    box.addEventListener('click', e => e.stopPropagation()); // prevent close on box click
-    const onKey = e => { if (e.key === 'Escape') { doClose(); document.removeEventListener('keydown', onKey); } };
-    document.addEventListener('keydown', onKey);
-
     calc();
+
+    const label = `${origin || '—'} → ${dest || '—'}`;
+
+    // Only the ACTIVE pane runs a DH origin watcher → at most one observer alive.
+    function activate() {
+      mbody.style.display = '';
+      if (!dhResolved && dhFromEl) {
+        stopOriginWatch = getDATOriginValue(dhFromEl, () => { dhResolved = true; fetchDHRoute(); });
+      }
+    }
+    function deactivate() {
+      mbody.style.display = 'none';
+      stopOriginWatch(); stopOriginWatch = () => {};
+    }
+    function destroy() {
+      stopOriginWatch(); stopOriginWatch = () => {};
+      clearTimeout(_dhDebounce);
+      mbody.remove();
+    }
+
+    return { origin, dest, label, paneEl: mbody, activate, deactivate, destroy };
+    }
+    // ===== end buildPane =====
+
+    // ===== SHELL behavior: position / persist / minimize / drag / resize =====
+    const num = v => (typeof v === 'number' && Number.isFinite(v)) ? v : null;
+    const isCollapsed = () => box.classList.contains('dlm-modal-collapsed');
+
+    // Position: restore saved rect (validated + clamped) or center by default.
+    const sr = _routeModalRect;
+    const savedW = sr ? num(sr.width)  : null;
+    const savedH = sr ? num(sr.height) : null;
+    if (sr && num(sr.left) > 0 && num(sr.top) > 0) {
+      const w = savedW || 1222;
+      box.style.left = Math.max(0, Math.min(window.innerWidth  - Math.min(w, window.innerWidth), sr.left)) + 'px';
+      box.style.top  = Math.max(0, Math.min(window.innerHeight - 40, sr.top)) + 'px';
+      if (savedW) box.style.width  = savedW + 'px';
+      if (savedH) box.style.height = savedH + 'px';
+    } else {
+      const w = Math.min(1222, window.innerWidth - 48);
+      box.style.left = Math.max(0, (window.innerWidth - w) / 2) + 'px';
+      box.style.top  = '36px';
+    }
+    if (sr && sr.min) {
+      box.classList.add('dlm-modal-collapsed');
+      minBtn.textContent = '▢'; minBtn.title = 'Expand';
+    }
+
+    document.body.appendChild(wrap);
+
+    const persistRect = () => {
+      if (!document.body.contains(box)) return;
+      const b = box.getBoundingClientRect();
+      if (!(b.width > 0 && b.height > 0)) return;
+      if (!(b.left > 0 && b.top > 0)) return;
+      if (isCollapsed()) {
+        const prev = _routeModalRect || {};
+        _routeModalRect = { left: b.left, top: b.top, width: num(prev.width), height: num(prev.height), min: true };
+      } else {
+        _routeModalRect = { left: b.left, top: b.top, width: b.width, height: b.height, min: false };
+      }
+      chrome.storage.local.set({ 'dlm-route-modal-rect': _routeModalRect });
+    };
+
+    const setCollapsed = (on) => {
+      box.classList.toggle('dlm-modal-collapsed', on);
+      minBtn.textContent = on ? '▢' : '—';
+      minBtn.title = on ? 'Expand' : 'Minimize';
+      persistRect();
+    };
+    minBtn.addEventListener('click', e => { e.stopPropagation(); setCollapsed(!isCollapsed()); });
+
+    let mdlDragging = false, mdlOffX = 0, mdlOffY = 0, mdlMoved = false;
+    mhdr.style.cursor = 'grab';
+    const onHdrDown = e => {
+      if (e.target.closest('.dlm-modal-close') || e.target.closest('.dlm-modal-min') || e.target.closest('.dlm-modal-tab')) return;
+      mdlDragging = true; mdlMoved = false;
+      const b = box.getBoundingClientRect();
+      mdlOffX = e.clientX - b.left; mdlOffY = e.clientY - b.top;
+      e.preventDefault();
+    };
+    const onMove = e => {
+      if (!mdlDragging) return;
+      mdlMoved = true;
+      const w = box.offsetWidth;
+      box.style.left = Math.max(0, Math.min(window.innerWidth  - w, e.clientX - mdlOffX)) + 'px';
+      box.style.top  = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - mdlOffY)) + 'px';
+    };
+    const onUp = () => {
+      if (!mdlDragging) return;
+      mdlDragging = false;
+      if (mdlMoved) persistRect();
+      else if (isCollapsed()) setCollapsed(false);
+    };
+    mhdr.addEventListener('mousedown', onHdrDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+
+    let _rzTimer = null, _roReady = false;
+    const ro = new ResizeObserver(() => {
+      if (!_roReady) { _roReady = true; return; }
+      clearTimeout(_rzTimer);
+      _rzTimer = setTimeout(persistRect, 300);
+    });
+    ro.observe(box);
+
+    // ===== 8-point resize (edges + corners; replaces native resize:both) =====
+    // Edges resize one dimension; corners resize both. Top/left edges anchor the
+    // OPPOSITE edge (move left/top while resizing) so the box grows/shrinks from
+    // the grabbed side. Mins mirror the CSS (.dlm-modal min-width/height); all
+    // sides clamp to the viewport.
+    const MINW = 520, MINH = 360;
+    const clampN = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    let rzActive = false, rzN = false, rzS = false, rzE = false, rzW = false;
+    let rzSX = 0, rzSY = 0, rzSL = 0, rzST = 0, rzSW = 0, rzSH = 0;
+
+    const onRzMove = e => {
+      if (!rzActive) return;
+      const dx = e.clientX - rzSX, dy = e.clientY - rzSY;
+      let L = rzSL, T = rzST, W = rzSW, H = rzSH;
+      if (rzE) W = clampN(rzSW + dx, MINW, window.innerWidth  - rzSL);
+      if (rzW) { const right  = rzSL + rzSW; W = clampN(rzSW - dx, MINW, right);  L = right  - W; }
+      if (rzS) H = clampN(rzSH + dy, MINH, window.innerHeight - rzST);
+      if (rzN) { const bottom = rzST + rzSH; H = clampN(rzSH - dy, MINH, bottom); T = bottom - H; }
+      box.style.left = L + 'px'; box.style.top = T + 'px';
+      box.style.width = W + 'px'; box.style.height = H + 'px';
+    };
+    const onRzUp = () => {
+      if (!rzActive) return;
+      rzActive = false;
+      document.body.style.userSelect = '';
+      persistRect();
+    };
+    const startRz = (e, dirs) => {
+      if (isCollapsed()) return;
+      // preventDefault + stopPropagation so a top/left edge strip never also
+      // triggers the header drag or a text selection.
+      e.preventDefault(); e.stopPropagation();
+      rzActive = true;
+      rzN = !!dirs.n; rzS = !!dirs.s; rzE = !!dirs.e; rzW = !!dirs.w;
+      const b = box.getBoundingClientRect();
+      rzSX = e.clientX; rzSY = e.clientY;
+      rzSL = b.left; rzST = b.top; rzSW = b.width; rzSH = b.height;
+      document.body.style.userSelect = 'none';
+    };
+    [['n', {n:1}], ['s', {s:1}], ['e', {e:1}], ['w', {w:1}],
+     ['ne', {n:1,e:1}], ['nw', {n:1,w:1}], ['se', {s:1,e:1}], ['sw', {s:1,w:1}]
+    ].forEach(([k, dirs]) => {
+      const h = document.createElement('div');
+      h.className = 'dlm-mrz dlm-mrz-' + k;
+      h.addEventListener('mousedown', ev => startRz(ev, dirs));
+      box.appendChild(h);
+    });
+    document.addEventListener('mousemove', onRzMove);
+    document.addEventListener('mouseup', onRzUp);
+
+    // ===== Tab controller =====
+    const tabs = [];            // pane objects, insertion order, MAX 5
+    let activeIdx = -1;
+
+    function renderTabStrip() {
+      tabStrip.innerHTML = '';
+      tabs.forEach((pane, i) => {
+        const tab = document.createElement('div');
+        tab.className = 'dlm-modal-tab' + (i === activeIdx ? ' dlm-modal-tab-active' : '');
+        const lbl = document.createElement('span');
+        lbl.className = 'dlm-modal-tab-label';
+        lbl.textContent = pane.label;
+        lbl.title = pane.label;
+        lbl.addEventListener('click', () => switchTab(i));
+        const x = document.createElement('button');
+        x.className = 'dlm-modal-tab-x';
+        x.textContent = '✕';
+        x.title = 'Close tab';
+        x.addEventListener('click', e => { e.stopPropagation(); closeTab(i); });
+        tab.append(lbl, x);
+        tabStrip.appendChild(tab);
+      });
+    }
+
+    function switchTab(i) {
+      if (i < 0 || i >= tabs.length) return;
+      if (activeIdx >= 0 && tabs[activeIdx]) tabs[activeIdx].deactivate();
+      activeIdx = i;
+      tabs[i].activate();
+      titleEl.innerHTML = `${esc(tabs[i].origin || '—')}<span>→</span>${esc(tabs[i].dest || '—')}`;
+      renderTabStrip();
+    }
+
+    function closeTab(i) {
+      if (i < 0 || i >= tabs.length) return;
+      const wasActive = (i === activeIdx);
+      tabs[i].destroy();
+      tabs.splice(i, 1);
+      if (tabs.length === 0) { doClose(); return; }
+      if (wasActive) {
+        // Active pane is gone (destroyed) — force-activate a neighbor.
+        activeIdx = -1;
+        switchTab(Math.min(i, tabs.length - 1));
+      } else {
+        // A background tab closed — keep the current pane visible, just fix indices.
+        if (i < activeIdx) activeIdx -= 1;
+        renderTabStrip();
+      }
+    }
+
+    function openTab(o, d, r) {
+      const pane = buildPane(o, d, r);
+      bodyHost.appendChild(pane.paneEl);
+      tabs.push(pane);
+      if (tabs.length > 5) {            // cap at 5 → oldest drops off
+        tabs.shift().destroy();
+        if (activeIdx >= 0) activeIdx -= 1;   // indices shifted left by one
+      }
+      // Do NOT reset activeIdx — switchTab must deactivate the currently-active
+      // pane (hide it) before showing the new one, else panes overlap.
+      switchTab(tabs.length - 1);
+    }
+
+    // ===== Close (tears down shell + ALL panes → zero observers survive) =====
+    const doClose = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('mousemove', onRzMove);
+      document.removeEventListener('mouseup', onRzUp);
+      document.body.style.userSelect = '';
+      document.removeEventListener('keydown', onKey);
+      clearTimeout(_rzTimer);
+      ro.disconnect();
+      tabs.forEach(p => p.destroy());
+      tabs.length = 0;
+      wrap.remove();
+      _routeModal = null;
+      _routeModalTeardown = null;
+      if (onClose) onClose();
+    };
+    closeBtn.addEventListener('click', doClose);
+    const onKey = e => { if (e.key === 'Escape') doClose(); };
+    document.addEventListener('keydown', onKey);
+    _routeModalTeardown = doClose;
+    _routeModal = { box, openTab, switchTab, closeTab, doClose };
+
+    // Open the first tab for this lane.
+    openTab(origin, dest, rate);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
