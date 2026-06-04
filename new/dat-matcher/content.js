@@ -189,6 +189,7 @@
       .replace(/\bhgts\b/g, 'heights')
       .replace(/\bspgs\b/g, 'springs')
       .replace(/\bspg\b/g,  'spring')
+      .replace(/\brnch\b/g, 'ranch')
       .replace(/\bvlg\b/g,  'village')
       .replace(/\bjct\b/g,   'junction')
       .replace(/\bst\.?\b/g, 'saint')       // St. / St → Saint
@@ -3257,6 +3258,21 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
           }
         }
 
+        // ── RETRY GUARD: if both clean detail-panel sources failed, the detail
+        // node hasn't finished rendering yet (DAT populates city-state-container
+        // async). Schedule one self-retry after 250ms rather than falling through
+        // to the dirty row.dataset.dlmOrigin, which can carry badge text like
+        // "Required Ft Lupton, CO". On the retry pass oClean/dClean will succeed
+        // once DAT has rendered; if they still fail, Step 3 below runs as a
+        // genuine last resort (rare). dlmExpandRetry prevents infinite loops;
+        // isConnected guards against acting on a node DAT has since removed.
+        if (!oClean && !dClean && !node.dataset.dlmExpandRetry) {
+          node.dataset.dlmExpandRetry = '1';
+          delete node.dataset.dlmExpandSeen; // was stamped above; clear so retry can re-enter
+          setTimeout(() => { if (node.isConnected) { _pendingExpand.add(node); flushExpand(); } }, 250);
+          continue;
+        }
+
         // ── STEP 3 fallback: only when a clean source didn't yield a valid
         // City,ST. Use the stamped dataset (clean when the load matched) / the
         // row-cell scrape, then stripColLabel as the thin safety net (kept here
@@ -3284,7 +3300,10 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
           // Legacy ROUTE_RE on the clicked row element (node already tried above).
           if ((!o || !d) && row) {
             const m = ROUTE_RE.exec(row.innerText || row.textContent || '');
-            if (m) { if (!o) o = m[1].trim(); if (!d) d = m[2].trim(); }
+            if (m) {
+              if (!o) o = m[1].trim();
+              if (!d) d = m[2].trim();
+            }
           }
         }
         // stripColLabel + cleanCity ONLY on fallback-sourced values — clean
