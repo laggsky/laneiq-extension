@@ -2168,10 +2168,11 @@ if (so && ro && so !== ro) return false;
 
     const lk = new Set(Object.keys(lovedLoads));
 
-    // Lane Lookup (radius) is the top/primary section. The old "Current Load" box
-    // was removed — it showed the broad same-origin average (noise) that the
-    // scoped Lane Lookup summary already replaces.
-    let html = renderRadiusSection(origin, dest, _radiusOriginMi, _radiusDestMi);
+    // Order: Exact Lane Matches → Same Broker → Lane Lookup (radius). The exact
+    // same-lane box and same-broker box now render ABOVE the radius section so the
+    // dispatcher sees the precise hit first. The old "Current Load" box was removed
+    // — it showed the broad same-origin average (noise) the Lane Lookup replaces.
+    let html = '';
 
     if (odM.length) {
       // skipAnim=true: all records use animation-delay:0 so none are hidden during a
@@ -2186,6 +2187,9 @@ if (so && ro && so !== ro) return false;
       const brokerLane = bM.filter(r => odM.find(o => o.loadNum === r.loadNum));
       if (brokerLane.length) html += `<div class="dlm-stitle" style="color:#af52de">Same Broker — ${esc(datBroker)}</div>`;
     }
+
+    // Lane Lookup (radius) renders LAST — below the exact + same-broker boxes.
+    html += renderRadiusSection(origin, dest, _radiusOriginMi, _radiusDestMi);
 
     panelBodyHTML = html;
 
