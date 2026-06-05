@@ -434,8 +434,13 @@
     if (matches.length) {
       const st = calcStats(matches);
       return `
-        <div class="dlm-radius-sum">
-          <div class="dlm-radius-sum-label">${oCity} → ${dCity} area · avg <b>${st.avg}</b>, best <b>${st.best}</b> (${matches.length} loads)</div>
+        <div class="dlm-rate-card">
+          <div class="dlm-rate-card-lane">${oCity} <span class="dlm-rate-card-arrow">→</span> ${dCity}</div>
+          <div class="dlm-rate-card-stats">
+            <div class="dlm-rate-stat"><div class="dlm-rate-stat-k">Avg</div><div class="dlm-rate-stat-v">${st.avg}</div></div>
+            <div class="dlm-rate-stat dlm-rate-stat-best"><div class="dlm-rate-stat-k">Best</div><div class="dlm-rate-stat-v">${st.best}</div></div>
+          </div>
+          <div class="dlm-rate-card-sub">${matches.length} loads in radius</div>
         </div>
         ${renderRecs(matches, '#f5a623', 50, true, true, lk)}`;
     }
