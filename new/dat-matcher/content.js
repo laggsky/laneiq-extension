@@ -238,7 +238,7 @@
     if (!raw || raw === 'nan') return '';
     return String(raw).toLowerCase()
       .replace(/logistics|transport|brokerage|freight|group|inc|llc|corp|co/gi, '')
-      .replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      .replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
   function normCity(str) {
@@ -1052,7 +1052,11 @@ if (so && ro && so !== ro) return false;
   function getBroker(row) {
     const el = row.querySelector('[class*="company"], [class*="Company"], [class*="carrier"]');
     if (el) {
-      const t = el.textContent.trim();
+      // Strip any phone number DAT may render inside the company element when a
+      // row is expanded — prevents "(314) 227-7612" from polluting datBroker.
+      const t = el.textContent.trim()
+        .replace(/\s*\(\d{3}\)\s*\d{3}[-.\s]\d{4}(\s*x\d+)?\s*/g, ' ')
+        .replace(/\s+/g, ' ').trim();
       if (t && t.length > 1 && t.length < 80 && !/^\d+$/.test(t)) return t;
     }
     return '';
@@ -1127,10 +1131,10 @@ if (so && ro && so !== ro) return false;
     let cls, badgeCls, badgeTxt;
 
     const normDatBroker = datBroker ? normBroker(datBroker) : '';
-    const normDatFirst = normDatBroker.split(' ')[0];
-    const sameLineBroker = normDatFirst && odM.filter(r =>
-      r.broker && normBroker(r.broker).includes(normDatFirst)
-    );
+    const sameLineBroker = normDatBroker.length >= 2 && odM.filter(r => {
+      const rb = r.broker ? normBroker(r.broker) : '';
+      return rb.length >= 2 && (rb === normDatBroker || rb.includes(normDatBroker) || normDatBroker.includes(rb));
+    });
 
     if (sameLineBroker && sameLineBroker.length > 0) {
       cls = 'dlm-purple'; badgeCls = 'dlm-b-purple';
