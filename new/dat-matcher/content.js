@@ -373,7 +373,8 @@
     const oCity = esc(origin || '');
     const dCity = esc(dest || '');
     const controls = `
-      <div class="dlm-stitle" style="margin-top:16px">Lane Lookup</div>
+      <div class="dlm-stitle">Lane Lookup</div>
+      <div class="dlm-radius-box">
       <div class="dlm-radius-controls">
         <div class="dlm-radius-row">
           <span class="dlm-r-tag">From</span>
@@ -394,7 +395,8 @@
           <span class="dlm-r-mi" id="dlm-r-dest-mi-val">${destMi} mi</span>
         </div>
       </div>
-      <div id="dlm-radius-results">${renderRadiusResults(origin, dest, originMi, destMi)}</div>`;
+      <div id="dlm-radius-results">${renderRadiusResults(origin, dest, originMi, destMi)}</div>
+      </div>`;
     return `<div id="dlm-radius-section">${controls}</div>`;
   }
 
