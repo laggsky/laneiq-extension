@@ -1626,6 +1626,12 @@ if (so && ro && so !== ro) return false;
       </div>`;
   }
 
+  function paintSliderFill(slider) {
+    const pct = (Number(slider.value) / 300) * 100;
+    slider.style.background =
+      `linear-gradient(to right, #0058e0 ${pct}%, rgba(0,0,0,.12) ${pct}%)`;
+  }
+
   function switchTab(name) {
     _activeTab = name;
     clearInterval(_regionsTimer); _regionsTimer = null;
@@ -1652,6 +1658,7 @@ if (so && ro && so !== ro) return false;
       bodyEl.innerHTML = panelBodyHTML ||
         '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Click a highlighted row<br>to see booking history</div>';
       bodyEl.scrollTop = 0;
+      document.querySelectorAll('.dlm-r-slider').forEach(paintSliderFill);
     } else if (name === 'loved') {
       if (searchWrap) searchWrap.style.display = '';
       const searchEl = document.getElementById('dlm-search');
@@ -2121,6 +2128,7 @@ if (so && ro && so !== ro) return false;
       if (isSlider) {
         const valEl = document.getElementById(e.target.id + '-val');
         if (valEl) valEl.textContent = e.target.value + ' mi';
+        paintSliderFill(e.target);
       }
 
       clearTimeout(_radiusTimer);
@@ -2226,6 +2234,7 @@ if (so && ro && so !== ro) return false;
     if (!bodyEl) return;
     bodyEl.innerHTML = html;
     bodyEl.scrollTop = 0;
+    document.querySelectorAll('.dlm-r-slider').forEach(paintSliderFill);
   }
 
   const MATCH_URL = 'https://laneiq-backend-production.up.railway.app/match';
@@ -2296,6 +2305,7 @@ if (so && ro && so !== ro) return false;
     if (!bodyEl) return;
     bodyEl.innerHTML = csvHTML + dbLoadingHTML;
     bodyEl.scrollTop = 0;
+    document.querySelectorAll('.dlm-r-slider').forEach(paintSliderFill);
 
     // --- DB fetch ---
     const payload = { origin: normCity(origin), destination: normCity(dest), licenseKey };
