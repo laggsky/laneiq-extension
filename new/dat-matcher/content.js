@@ -2590,12 +2590,12 @@ if (so && ro && so !== ro) return false;
       return `
         <div class="dlm-rec" style="border-left-color:${cardColor};animation-delay:${skipAnim ? 0 : i*.04}s">
           <div class="dlm-rh">
-            <div style="display:flex;flex-direction:column;gap:2px;max-width:165px">
+            <div style="display:flex;flex-direction:column;gap:2px;max-width:165px;min-width:0">
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
               ${trailerTag}
             </div>
-            <div style="display:flex;align-items:center;gap:5px">${gmailBtn}${outlookBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">${gmailBtn}${outlookBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
           <div class="dlm-grid">
             <div class="dlm-k">Rate</div><div class="dlm-v dlm-rate">${esc(rd)}</div>
