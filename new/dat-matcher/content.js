@@ -189,6 +189,8 @@
       .replace(/\bhgts\b/g, 'heights')
       .replace(/\bspgs\b/g, 'springs')
       .replace(/\bspg\b/g,  'spring')
+      .replace(/\bsprs\b/g, 'springs')
+      .replace(/\bgrv\b/g,  'grove')
       .replace(/\brnch\b/g, 'ranch')
       .replace(/\bvlg\b/g,  'village')
       .replace(/\bjct\b/g,   'junction')
@@ -268,7 +270,17 @@
   // [lat,lng] or null. Uses the SAME normKey() the indexes use → direct hash hit.
   function getCoords(cityStateString) {
     if (!_cityCoords || !cityStateString) return null;
-    return _cityCoords[normKey(cityStateString)] || null;
+    const raw = String(cityStateString);
+    // Prefer the expanded directional (e.g. "S Salt Lake" -> "South Salt Lake")
+    // so we hit the precise city before falling back to the parent-city strip.
+    const expanded = raw.replace(/^\s*([NSEW])\s+/i, (m, d) =>
+      ({ n: 'North ', s: 'South ', e: 'East ', w: 'West ' }[d.toLowerCase()]));
+    if (expanded !== raw) {
+      const hit = _cityCoords[normKey(expanded)];
+      if (hit) return hit;
+    }
+    // Fallback: existing behavior (norm() strips the leading directional -> parent city).
+    return _cityCoords[normKey(raw)] || null;
   }
 
   // Great-circle distance in miles between two [lat,lng] pairs.
@@ -3286,7 +3298,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
             for (let i = 0; i < 8 && candidate; i++) {
               if ((!o || !d) && i >= 4) {
                 const text = candidate.innerText || '';
-                const cityPattern = /[A-Z][A-Za-z\s\.]{1,20},\s*[A-Z]{2}/g;
+                const cityPattern = /[A-Z][A-Za-z .]{1,20},\s*[A-Z]{2}/g;
                 const hits = [...text.matchAll(cityPattern)];
                 if (hits.length >= 2) {
                   if (!o) o = hits[0][0].trim();
