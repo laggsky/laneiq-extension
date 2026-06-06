@@ -229,24 +229,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
       } catch (e) { /* cache read failed — fall through to network */ }
 
-      // (c) Miss → call Directions API exactly as today.
-      console.log('[LaneIQ] route cache MISS, fetching:', cacheKey);
-      const url = 'https://maps.googleapis.com/maps/api/directions/json' +
-        `?origin=${encodeURIComponent(origin)}` +
-        `&destination=${encodeURIComponent(dest)}` +
-        `&key=${encodeURIComponent(apiKey)}`;
+      console.log('[LaneIQ] route cache MISS, fetching via proxy:', cacheKey);
+      const url = 'https://laneiq-backend-production.up.railway.app/maps/directions'
+        + `?origin=${encodeURIComponent(origin)}`
+        + `&dest=${encodeURIComponent(dest)}`;
       try {
         const r = await fetch(url);
         const data = await r.json();
-        const route = data.routes?.[0];
-        if (data.status === 'OK' && route) {
-          const leg = route.legs[0];
+        if (!data.error && data.polyline) {
           const result = {
-            miles:    Math.round(leg.distance.value * 0.000621371),
-            duration: leg.duration.text,
-            polyline: route.overview_polyline.points,
+            miles:    data.miles,
+            duration: data.duration,
+            polyline: data.polyline,
           };
-          // Write only successful responses. If _v mismatches, rebuild from scratch.
           try {
             const cur  = (await chrome.storage.local.get('routeCache')).routeCache;
             const base = (cur && cur._v === ROUTE_CACHE_VERSION) ? cur : { _v: ROUTE_CACHE_VERSION };
@@ -256,10 +251,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           } catch (e) { /* cache write failed — must not break the response */ }
           sendResponse(result);
         } else {
-          sendResponse({ error: data.status || 'API error' });  // NOT cached
+          sendResponse({ error: data.error || 'API error' });
         }
       } catch (e) {
-        sendResponse({ error: e.message });  // NOT cached
+        sendResponse({ error: e.message });
       }
     })();
 

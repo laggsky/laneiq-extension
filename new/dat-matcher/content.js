@@ -3743,7 +3743,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       mapContainer.innerHTML = '';
       if (!mainPolyline) return;
 
-      let url = 'https://maps.googleapis.com/maps/api/staticmap' +
+      let url = 'https://laneiq-backend-production.up.railway.app/maps/staticmap' +
         '?size=800x480&scale=2' +
         `&path=color:0x007affff|weight:5|enc:${encodeURIComponent(mainPolyline)}`;
 
@@ -3756,8 +3756,6 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         url += `&markers=color:blue|label:A|${encodeURIComponent(origin)}`;
         url += `&markers=color:green|label:B|${encodeURIComponent(dest)}`;
       }
-      url += `&key=${encodeURIComponent(mapsApiKey)}`;
-
       const img = document.createElement('img');
       img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
       img.alt = 'Route map';
@@ -3765,7 +3763,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       mapContainer.appendChild(img);
     }
 
-    if (mapsApiKey && origin && dest) {
+    if (origin && dest) {
       mapContainer.innerHTML = '<span style="font-size:13px;color:#8e8e93">Loading map…</span>';
 
       // Fetch the loaded route first; once mainPolyline is ready, trigger the DH
@@ -3807,7 +3805,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     stats.className = 'dlm-map-stats';
     stats.innerHTML = `
       <span style="font-size:11px;color:#aeaeb2;font-weight:500">Loaded</span>
-      <span class="dlm-map-stat" data-dlm="stat-dist">${mapsApiKey ? 'Loading…' : '—'}</span>
+      <span class="dlm-map-stat" data-dlm="stat-dist">Loading…</span>
       <span class="dlm-map-stat-sep">·</span>
       <span class="dlm-map-stat" data-dlm="stat-dur"></span>
       <span class="dlm-map-stat-sep" style="margin-left:8px">|</span>
@@ -3942,7 +3940,6 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
 
     // ── DH From → auto-fetch DH miles + redraw map ────────────────────────────
     function fetchDHRoute() {
-      if (!mapsApiKey) return;
       const dhCity = q('dh-from')?.value?.trim();
       const dhDistEl = q('stat-dh-dist');
       const dhDurEl  = q('stat-dh-dur');
