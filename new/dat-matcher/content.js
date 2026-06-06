@@ -1439,9 +1439,10 @@ if (so && ro && so !== ro) return false;
       <div style="${CARD}">
         <div style="${LABEL}">Gmail — Rate Confirmations</div>
         <div style="display:flex;gap:6px;margin-bottom:8px">
-          <input id="dlm-setup-gmail-input" type="text" value="${esc(gmailEmail)}" placeholder="Paste Gmail URL or your email"
+          <input id="dlm-setup-gmail-input" type="text" value="${esc(gmailEmail)}" placeholder="Paste Gmail URL"
                  style="${INPUT};flex:1;min-width:0">
           <button class="dlm-setup-gmail-save" style="${BTN}">Save</button>
+          <button class="dlm-setup-gmail-disconnect" style="padding:6px 10px;border:1px solid #d1d1d6;border-radius:6px;background:#fff;color:#8e8e93;font-size:12px;cursor:pointer;margin-left:6px">Disconnect</button>
         </div>
         <div style="display:flex;gap:4px;margin-bottom:8px">
           ${[0,1,2,3,4].map(n => `<button class="dlm-setup-acct-btn" data-gmail-idx="${n}"
@@ -1458,9 +1459,10 @@ if (so && ro && so !== ro) return false;
       <div style="${CARD}">
         <div style="${LABEL}">Outlook — Rate Confirmations</div>
         <div style="display:flex;gap:6px;margin-bottom:8px">
-          <input id="dlm-setup-outlook-input" type="text" value="${esc(outlookEmail)}" placeholder="Paste Outlook URL or your email"
+          <input id="dlm-setup-outlook-input" type="text" value="${esc(outlookEmail)}" placeholder="Paste Outlook URL"
                  style="${INPUT};flex:1;min-width:0">
           <button class="dlm-setup-outlook-save" style="${BTN}">Save</button>
+          <button class="dlm-setup-outlook-disconnect" style="padding:6px 10px;border:1px solid #d1d1d6;border-radius:6px;background:#fff;color:#8e8e93;font-size:12px;cursor:pointer;margin-left:6px">Disconnect</button>
         </div>
         <div style="font-size:10px;color:#aeaeb2;line-height:1.5;margin-bottom:6px">Opens your Outlook inbox — search the load # manually · using outlook.${outlookHost}</div>
         <div id="dlm-setup-outlook-status" style="font-size:11px;font-weight:500;color:${activeMailProvider === 'outlook' ? '#34c759' : '#aeaeb2'}">
@@ -2024,6 +2026,16 @@ if (so && ro && so !== ro) return false;
         if (el && _activeTab === 'setup') renderSetupBody(el);
         return;
       }
+      if (e.target.closest('.dlm-setup-gmail-disconnect')) {
+        gmailEmail = '';
+        gmailIndex = 0;
+        if (activeMailProvider === 'gmail') activeMailProvider = '';
+        await chrome.storage.local.set({ gmailEmail, gmailIndex, activeMailProvider });
+        const inp = document.getElementById('dlm-setup-gmail-input'); if (inp) inp.value = '';
+        const st = document.getElementById('dlm-setup-gmail-status');
+        if (st) { st.textContent = 'Not active'; st.style.color = '#aeaeb2'; }
+        return;
+      }
       if (e.target.closest('.dlm-setup-acct-btn')) {
         const acctBtn = e.target.closest('.dlm-setup-acct-btn');
         gmailIndex = parseInt(acctBtn.dataset.gmailIdx, 10);
@@ -2043,6 +2055,16 @@ if (so && ro && so !== ro) return false;
         await chrome.storage.local.set({ outlookEmail, outlookConfigured, outlookHost, activeMailProvider });
         const el = document.getElementById('dlm-body');
         if (el && _activeTab === 'setup') renderSetupBody(el);
+        return;
+      }
+      if (e.target.closest('.dlm-setup-outlook-disconnect')) {
+        outlookEmail = '';
+        outlookConfigured = false;
+        if (activeMailProvider === 'outlook') activeMailProvider = '';
+        await chrome.storage.local.set({ outlookEmail, outlookConfigured, activeMailProvider });
+        const inp = document.getElementById('dlm-setup-outlook-input'); if (inp) inp.value = '';
+        const st = document.getElementById('dlm-setup-outlook-status');
+        if (st) { st.textContent = 'Not active'; st.style.color = '#aeaeb2'; }
         return;
       }
       const saveBtn = e.target.closest('.dlm-tpl-save');
@@ -3773,7 +3795,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         { type: 'getRoute', origin, dest, apiKey: mapsApiKey }
       ).catch(() => null).then(mainResp => {
         if (!mainResp || mainResp.error) {
-          mapContainer.innerHTML = `<span style="font-size:13px;color:#ff453a">Maps key error — check your API key in LaneIQ settings</span>`;
+          mapContainer.innerHTML = `<span style="font-size:13px;color:#ff453a">Map unavailable — couldn't load route</span>`;
           const distEl = q('stat-dist');
           if (distEl) distEl.textContent = 'key error';
           return;

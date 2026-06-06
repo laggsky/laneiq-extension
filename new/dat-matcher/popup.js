@@ -135,28 +135,6 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     document.getElementById('statusSub').textContent = 'Open the panel on DAT → Setup tab to upload CSV';
   }
 
-  // ── Maps API Key ─────────────────────────────────────────────────────────────
-  document.getElementById('mapsHelpToggle').addEventListener('click', () => {
-    const note = document.getElementById('mapsHelpNote');
-    note.style.display = note.style.display === 'none' ? 'block' : 'none';
-  });
-
-  const mapsKeyInput  = document.getElementById('mapsKeyInput');
-  const mapsKeyStatus = document.getElementById('mapsKeyStatus');
-  if (stored.mapsApiKey) {
-    mapsKeyInput.value = '••••••••••••••••••••';
-    mapsKeyStatus.textContent = '✓ API key saved';
-    mapsKeyStatus.className = 'gmail-status set';
-  }
-  document.getElementById('mapsKeySave').addEventListener('click', async () => {
-    const key = mapsKeyInput.value.trim();
-    if (!key || key.startsWith('•')) { mapsKeyStatus.textContent = 'Paste a new key to update'; return; }
-    await chrome.storage.local.set({ mapsApiKey: key });
-    mapsKeyInput.value = '••••••••••••••••••••';
-    mapsKeyStatus.textContent = '✓ API key saved';
-    mapsKeyStatus.className = 'gmail-status set';
-  });
-
   // ── License key ───────────────────────────────────────────────────────────────
   const licenseInput  = document.getElementById('licenseInput');
   const licenseStatus = document.getElementById('licenseStatus');
