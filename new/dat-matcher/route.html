@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <!-- img-src allows the cached Maps Static proxy; everything else stays 'self'. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; img-src 'self' https://laneiq-backend-production.up.railway.app; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'">
+  <title>LaneIQ — Route</title>
+  <link rel="stylesheet" href="content.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
+      background: #fff; }
+
+    /* Full-window flex column — mirrors .dlm-modal layout without fixed
+       positioning, drag, resize, or the minimize/close chrome (the OS window
+       handles all of that). */
+    #route-wrap { display: flex; flex-direction: column; height: 100vh; }
+
+    /* Header bar — mirrors .dlm-modal-hdr; no buttons (OS window owns them). */
+    #route-hdr {
+      display: flex; align-items: center; padding: 14px 18px;
+      border-bottom: 1px solid rgba(0,0,0,.07); flex-shrink: 0; background: #fff;
+    }
+    #route-title { font-size: 15px; font-weight: 600; color: #1d1d1f; letter-spacing: -.02em; }
+    #route-title span { color: #aeaeb2; margin: 0 6px; font-weight: 300; }
+
+    /* Tab strip (reuses .dlm-modal-tabs) sits below the header. */
+    #route-tabs:empty { display: none; }
+
+    /* Pane host fills remaining height; reuses .dlm-modal-panes flex rules. */
+    #route-panes { flex: 1; min-height: 0; }
+
+    /* Empty-state placeholder shown when no lanes are open. */
+    #route-empty {
+      flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center;
+      padding: 24px; text-align: center; background: #fff;
+    }
+
+    /* Live-update flash when a new lane arrives. */
+    @keyframes route-refresh { 0%{background:#f0fdf4} 100%{background:#fff} }
+    .dlm-modal-body.route-refreshed { animation: route-refresh .6s ease; }
+  </style>
+</head>
+<body>
+  <div id="route-wrap">
+    <div id="route-hdr">
+      <div id="route-title">Route</div>
+    </div>
+    <div class="dlm-modal-tabs" id="route-tabs"></div>
+    <div class="dlm-modal-panes" id="route-panes">
+      <div id="route-empty">
+        <span style="font-size:13px;color:#aeaeb2;line-height:1.6">
+          Click a load's <strong>RPM / Maps</strong> button on DAT<br>to see the route here
+        </span>
+      </div>
+    </div>
+  </div>
+  <script src="mapzoom.js"></script>
+  <script src="route.js"></script>
+</body>
+</html>

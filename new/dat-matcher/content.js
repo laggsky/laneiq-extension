@@ -21,7 +21,11 @@
   let isResizing = false, resizeRightEdge = 0, resizeCorner = false, _resizeBottomOnly = false;
   let _routeModalRect = null;      // {left,top,width,height,min} — restored across route-modal opens
   let _routeModalTeardown = null;  // tears down the previous modal's listeners/observer before reopen
-  let _routeModal = null;          // live tabbed-modal controller { box, openTab, switchTab, closeTab, doClose }
+  let _routeModal = null;          // live tabbed-modal controller { box, openTab, switchTab, closeTab, closeTabById, doClose }
+  let _paneSeq = 0;                // stable per-pane id source → identifies tabs in the detached window
+  let _routeRev = 0;              // monotonic routeState revision (every push bumps it)
+  let _routeCmdNonce = null;      // last-applied routeCommand nonce (apply-once, no loops)
+  let _routeClosedNonce = null;   // last-seen routeClosed token → user closed the float window: tear the inline modal down completely (do NOT re-show)
   let _dlmT;
   let _radiusTimer = null;
   // Lane Lookup radius settings persist across load-row switches + panel rebuilds.
@@ -33,6 +37,10 @@
   let _activeTab    = 'history';
   let lovedLoads    = {};   // loadKey → { record, savedAt }
   let _recPool      = {};   // loadKey → record, populated by renderRecs for heart click lookup
+  let _editSeq      = 0;    // monotonic token for edit/delete card identity (never collides)
+  const _editPool   = {};   // token → LIVE CSV record ref, populated by renderRecs (edit/delete)
+  const _sigToken   = {};   // _recSig(record) → STABLE token, so the SAME record gets the SAME token in every section it renders in (exact-match + radius), letting delete remove all its nodes at once
+  let _lastPanelCtx = null; // { mode:'single'|'dual', o, d, b, node } — for edit/delete re-render
   let _regionsTimer = null;
   let emailTemplates      = [];
   let activeTemplateIndex = 0;
@@ -48,37 +56,16 @@
   let activeMailProvider  = '';
   let filesMeta           = [];
 
-  // ── CSV utility functions (mirrored from popup.js for Setup tab) ─────────────
-  function parseCSV(text) {
-    const raw = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const logicalLines = []; let cur = '', inQ = false;
-    for (let i = 0; i < raw.length; i++) {
-      const ch = raw[i];
-      if (ch === '"') { inQ = !inQ; cur += ch; }
-      else if (ch === '\n' && !inQ) { logicalLines.push(cur); cur = ''; }
-      else { cur += ch; }
-    }
-    if (cur) logicalLines.push(cur);
-    if (logicalLines.length < 2) return [];
-    const headers = csvSplitLine(logicalLines[0]).map(h => h.replace(/"/g,'').trim());
-    const rows = [];
-    for (let i = 1; i < logicalLines.length; i++) {
-      const line = logicalLines[i].trim(); if (!line) continue;
-      const vals = csvSplitLine(line); const row = {};
-      headers.forEach((h, j) => row[h] = (vals[j]||'').replace(/^"|"$/g,'').trim());
-      rows.push(row);
-    }
-    return rows;
+  // Canonical rate cleaner — strip $/spaces, collapse multiple decimals keeping
+  // the last, strip commas, parseFloat; '' if NaN. Shared by the CSV importer and
+  // the in-panel record editor so both behave identically.
+  function cleanRate(raw) {
+    let s = String(raw || '').trim().replace(/[$\s]/g, '');
+    if ((s.match(/\./g) || []).length > 1) s = s.replace(/\.(?=.*\.)/g, '');
+    s = s.replace(/,/g, '');
+    return isNaN(parseFloat(s)) ? '' : String(parseFloat(s));
   }
-  function csvSplitLine(line) {
-    const vals = []; let cur = '', inQ = false;
-    for (const ch of line) {
-      if (ch === '"') { inQ = !inQ; }
-      else if (ch === ',' && !inQ) { vals.push(cur); cur = ''; }
-      else cur += ch;
-    }
-    vals.push(cur); return vals;
-  }
+
   function buildIndexesFromCSVRows(rows, fileIdx) {
     const odIdx = {}, oIdx = {}, brkIdx = {}; let count = 0;
     // Resolve the trailer/equipment column once per file (all rows share headers).
@@ -91,10 +78,7 @@
     for (const row of rows) {
       const origin = (row['Origin']||row['PickCity']||row['Pick City']||row['Origin City']||row['From City']||row['Shipper City']||'').trim();
       const dest   = (row['Destination']||row['DropCity']||row['Drop City']||row['Destination City']||row['To City']||row['Consignee City']||'').trim();
-      let rateClean = (row['Rate']||row['Total']||row['Gross']||row['Revenue']||row['Total Rate']||row['All In']||row['All-In']||row['Pay']||row['Line Haul']||row['Linehaul']||'').trim().replace(/[$\s]/g,'');
-      if ((rateClean.match(/\./g)||[]).length > 1) rateClean = rateClean.replace(/\.(?=.*\.)/g,'');
-      rateClean = rateClean.replace(/,/g,'');
-      const rate = isNaN(parseFloat(rateClean)) ? '' : String(parseFloat(rateClean));
+      const rate = cleanRate(row['Rate']||row['Total']||row['Gross']||row['Revenue']||row['Total Rate']||row['All In']||row['All-In']||row['Pay']||row['Line Haul']||row['Linehaul']||'');
       const broker = (row['Broker']||row['Broker company name']||'').trim();
       const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight / Pallets / FT']||row['Weight']||row['Wt']||row['WT']||row['Weight (lbs)']||row['Gross Weight']||row['GrossWeight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), trailer: trailerCol ? (row[trailerCol]||'').trim() : '', _f: fileIdx };
       if (!origin || origin.length < 2) continue; count++;
@@ -121,6 +105,37 @@
     for (const [k, recs] of Object.entries(index)) out[k] = recs.map(r => ({...r, _f: r._f > removedIdx ? r._f-1 : r._f}));
     return out;
   }
+  // ── In-panel record edit/delete: index surgery helpers ───────────────────────
+  // A single CSV record is duplicated across odIndex/oIndex/brokerIndex, and after
+  // a storage round-trip those copies are independent value-identical objects. To
+  // edit/delete consistently we match the copy in each bucket by a full-field
+  // signature (NOT object reference) and add/remove it from the correct lane key.
+  function _recSig(r) {
+    return [r.loadNum||'', r.origin||'', r.destination||'', r.puDate||'', r.rate||'',
+            r.broker||'', r.trailer||'', r.weight||'', r.pickupCompany||'',
+            r.deliveryCompany||'', r.commodity||'', r._f].join('');
+  }
+  function _bucketHas(index, key, sig) {
+    if (!key || !index) return false;
+    const arr = index[key];
+    return Array.isArray(arr) && arr.some(r => _recSig(r) === sig);
+  }
+  function _removeFromBucket(index, key, sig) {
+    if (!key || !index) return false;
+    const arr = index[key];
+    if (!Array.isArray(arr)) return false;
+    const i = arr.findIndex(r => _recSig(r) === sig);
+    if (i === -1) return false;
+    arr.splice(i, 1);                 // one copy only (correct cardinality for one booking)
+    if (!arr.length) delete index[key]; // clean up empty buckets
+    return true;
+  }
+  function _addToBucket(index, key, rec) {
+    if (!key) return;
+    if (!index[key]) index[key] = [];
+    index[key].push(rec);
+  }
+
   function countCSVIndex(odIdx) {
     let n = 0; const seen = new Set();
     for (const recs of Object.values(odIdx)) for (const r of recs) { const k = r.loadNum||(r.origin+'|'+(r.destination||'')+'|'+r.puDate); if (!seen.has(k)){seen.add(k);n++;} }
@@ -151,6 +166,7 @@
   let _initializing = false; // guard: prevent concurrent init() calls
   let _observersSetup = false; // guard: one-time observers/listeners
   let panelPopped  = false; // true while the floating pop-out window is open
+  let routePopped  = false; // true while the floating RPM/map route window is open
   let mapsApiKey   = '';    // Google Maps Distance Matrix API key
   let licenseTier  = 'solo';
   let dataSource   = 'csv';
@@ -1521,42 +1537,6 @@ if (so && ro && so !== ro) return false;
     });
   }
 
-  async function processSetupCSV(files, bodyEl) {
-    const csvFiles = files.filter(f => f.name.endsWith('.csv'));
-    if (!csvFiles.length) return;
-    const progress     = bodyEl.querySelector('#dlm-setup-progress');
-    const progressFill = bodyEl.querySelector('#dlm-setup-progress-fill');
-    const progressText = bodyEl.querySelector('#dlm-setup-progress-text');
-    if (progress) progress.style.display = 'block';
-    const stored = await chrome.storage.local.get(['filesMeta','odIndex','oIndex','brokerIndex']);
-    let existingMeta = stored.filesMeta || [];
-    let existingOD   = stored.odIndex   || {};
-    let existingO    = stored.oIndex    || {};
-    let existingBrk  = stored.brokerIndex || {};
-    const startIdx = existingMeta.length;
-    const newMeta  = [];
-    for (let i = 0; i < csvFiles.length; i++) {
-      const file = csvFiles[i];
-      if (progressText) progressText.textContent = `Parsing ${file.name}…`;
-      if (progressFill) progressFill.style.width  = Math.round(20 + (i / csvFiles.length) * 60) + '%';
-      const text = await file.text();
-      const rows = parseCSV(text);
-      const { odIndex: nOD, oIndex: nO, brokerIndex: nB, count } = buildIndexesFromCSVRows(rows, startIdx + i);
-      if (count === 0) { if (progress) progress.style.display = 'none'; return; }
-      existingOD  = mergeCSVIndexes(existingOD, nOD);
-      existingO   = mergeCSVIndexes(existingO,  nO);
-      existingBrk = mergeCSVIndexes(existingBrk, nB);
-      newMeta.push({ name: file.name, count });
-    }
-    if (progressFill) progressFill.style.width = '90%';
-    if (progressText) progressText.textContent = 'Saving…';
-    const combinedMeta = existingMeta.concat(newMeta);
-    const totalCount   = combinedMeta.reduce((s, f) => s + f.count, 0);
-    await chrome.storage.local.set({ filesMeta: combinedMeta, odIndex: existingOD, oIndex: existingO, brokerIndex: existingBrk, laneCount: totalCount, indexVersion: INDEX_VERSION, loadedAt: new Date().toISOString() });
-    filesMeta = combinedMeta;
-    if (progress) { progressFill.style.width = '100%'; progressText.textContent = `Done — ${totalCount.toLocaleString()} lanes`; setTimeout(() => { progress.style.display = 'none'; renderSetupBody(bodyEl); }, 1200); }
-  }
-
   // ── Messy CSV cleaner / column mapper ────────────────────────────────────────
   // Fully additive. Never modifies the existing upload path, parseCSV,
   // buildIndexesFromCSVRows, mergeCSVIndexes, or the delete handler. Handles
@@ -2120,6 +2100,49 @@ if (so && ro && so !== ro) return false;
     }
   }
 
+  // ── Dock the panel just below DAT's top toolbar/search bar ────────────────────
+  // DAT is an SPA with hashed class names, so we can't target the toolbar by class.
+  // Instead, measure the LOWEST fixed/sticky bar anchored to the top of the
+  // viewport (the search/date/menu row) and dock the panel just under it, with its
+  // RIGHT edge aligned to the toolbar's right edge (so it sits in the lane under
+  // the search box). Falls back to safe defaults that clear the toolbar.
+  const PANEL_TOP_FALLBACK = 134;   // px — matches the CSS #dlm-panel top fallback (just below the grey divider)
+  const PANEL_TOP_GAP = 24;         // gap below the toolbar's bottom border (clears the grey divider)
+  const PANEL_RIGHT_FALLBACK = 16;  // px — matches the CSS #dlm-panel right fallback
+  function getDatToolbarRect() {
+    let best = null;
+    const xs = [Math.round(window.innerWidth * 0.3), Math.round(window.innerWidth * 0.5)];
+    for (const x of xs) {
+      for (let y = 4; y <= 170; y += 14) {
+        for (const el of document.elementsFromPoint(x, y)) {
+          if (!el || (el.id && el.id.indexOf('dlm-') === 0) || el.closest('[id^="dlm-"]')) continue;
+          const cs = getComputedStyle(el);
+          if (cs.position !== 'fixed' && cs.position !== 'sticky') continue;
+          const r = el.getBoundingClientRect();
+          // A top toolbar: pinned near the viewport top, spans most of the width,
+          // and is a bar (not a full-height sidebar / page-cover overlay).
+          if (r.top <= 8 && r.bottom < 200 && r.width > window.innerWidth * 0.4) {
+            if (!best || r.bottom > best.bottom) best = { bottom: r.bottom, right: r.right };
+          }
+        }
+      }
+    }
+    return best; // null → nothing found, use fallbacks
+  }
+  // Dock the panel under DAT's toolbar and right-align it to the toolbar's right
+  // edge — ONLY when the user hasn't dragged it (their position always wins).
+  function dockTopUnderToolbar(panel) {
+    panel = panel || document.getElementById('dlm-panel');
+    if (!panel || panelUserMoved) return;
+    const t = getDatToolbarRect();
+    panel.style.top = (t ? Math.round(t.bottom + PANEL_TOP_GAP) : PANEL_TOP_FALLBACK) + 'px';
+    // Right-align: panel's right edge meets the toolbar's right edge (under the
+    // search box). right inset = distance from the viewport's right edge.
+    const rightInset = t ? Math.max(0, Math.round(window.innerWidth - t.right)) : PANEL_RIGHT_FALLBACK;
+    panel.style.right = rightInset + 'px';
+    panel.style.left  = 'auto';
+  }
+
   function buildPanel() {
     const d = document.createElement('div');
     d.id = 'dlm-panel';
@@ -2293,7 +2316,7 @@ if (so && ro && so !== ro) return false;
     //    forced back to the right (it stays where the user left it).
     function reflowPanel() {
       if (!panelUserMoved) {
-        if (d.style.left || d.style.right === 'auto') { d.style.left = ''; d.style.right = ''; }
+        dockTopUnderToolbar(d); // keep docked under DAT's toolbar, right-aligned to it
       } else {
         clampPanelToViewport(d);
       }
@@ -2337,6 +2360,47 @@ if (so && ro && so !== ro) return false;
         btn.title = 'Remove from Preferred';
         chrome.storage.local.set({ lovedLoads });
         if (_activeTab === 'loved') switchTab('loved');
+      }
+    });
+
+    // Edit / delete delegation (CSV-history cards only) — survives #dlm-body rerenders.
+    d.querySelector('#dlm-body').addEventListener('click', e => {
+      const editBtn   = e.target.closest('.dlm-edit-btn');
+      const delBtn    = e.target.closest('.dlm-del-btn');
+      const saveBtn   = e.target.closest('.dlm-edit-save');
+      const edCancel  = e.target.closest('.dlm-edit-cancel');
+      const delConf   = e.target.closest('.dlm-del-confirm');
+      const delCancel = e.target.closest('.dlm-del-cancel');
+      const hit = editBtn || delBtn || saveBtn || edCancel || delConf || delCancel;
+      if (!hit) return;
+      e.stopPropagation();
+      const tok  = hit.dataset.recToken;
+      const card = hit.closest('.dlm-rec');
+      if (editBtn)              { openRecordEditor(card, tok); return; }
+      if (delBtn)               { openDeleteConfirm(card, tok); return; }
+      if (edCancel || delCancel){ rerenderPanel(); return; }
+      if (delConf)              { deleteRecord(tok); return; }
+      if (saveBtn) {
+        const val = cls => { const el = card.querySelector('.' + cls); return el ? el.value : ''; };
+        const vals = {
+          broker:      val('dlm-ed-broker'),
+          trailer:     val('dlm-ed-trailer'),
+          rate:        val('dlm-ed-rate'),
+          origin:      val('dlm-ed-origin'),
+          destination: val('dlm-ed-dest'),
+        };
+        applyRecordEdit(tok, vals).then(res => {
+          if (res && !res.ok) {
+            const er = card.querySelector('.dlm-ed-err');
+            if (er) {
+              er.textContent = res.error === 'origin'
+                ? 'From (origin) is required — at least 2 characters.'
+                : 'Could not save this record (identity changed). Reopen the lane and try again.';
+              er.style.display = 'block';
+            }
+          }
+        });
+        return;
       }
     });
 
@@ -2421,8 +2485,19 @@ if (so && ro && so !== ro) return false;
         odI = reIndexCSVFiles(odI, idx); oI = reIndexCSVFiles(oI, idx); bI = reIndexCSVFiles(bI, idx);
         const newMeta = meta.filter((_, i) => i !== idx);
         const count   = countCSVIndex(odI);
+        // NOTE: do NOT write loadedAt here. loadedAt self-triggers the onChanged
+        // re-init (clearAllHighlights + init()), and when the LAST file is removed
+        // (laneCount→0) _doInit's disabled-source branch blanks the panel body —
+        // wiping the Setup tab. Instead we refresh everything IN PLACE below.
         await chrome.storage.local.set({ filesMeta: newMeta, odIndex: odI, oIndex: oI, brokerIndex: bI, laneCount: count, indexVersion: INDEX_VERSION });
-        filesMeta = newMeta;
+        // Sync in-memory state directly (the dropped re-init used to reload these).
+        odIndex = odI; oIndex = oI; brokerIndex = bI; filesMeta = newMeta;
+        // Refresh DAT row highlights against the new index — the same pass init()
+        // ends on — WITHOUT a full init() (so we never hit the disabled branch).
+        clearAllHighlights();
+        scan();
+        // Re-render the Setup tab in place → file list updates (shows "No CSV files
+        // loaded yet" when empty), the user stays on Setup, panel never blanks.
         const el = document.getElementById('dlm-body');
         if (el && _activeTab === 'setup') renderSetupBody(el);
         return;
@@ -2622,6 +2697,7 @@ if (so && ro && so !== ro) return false;
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
     switchTab('history');
+    _lastPanelCtx = { mode: 'single', o: origin, d: dest, b: datBroker, node: null };
 
     const lk = new Set(Object.keys(lovedLoads));
 
@@ -2715,6 +2791,7 @@ if (so && ro && so !== ro) return false;
     if (!panel) panel = buildPanel();
     if (!panelPopped) panel.style.display = 'flex';
     switchTab('history');
+    _lastPanelCtx = { mode: 'dual', o: origin, d: dest, b: datBroker, node: detailNode };
 
     const bodyEl = document.getElementById('dlm-body');
 
@@ -2984,6 +3061,10 @@ if (so && ro && so !== ro) return false;
   }
 
   function renderRecs(list, color, limit = 20, skipAnim = false, skipFilter = false, lovedKeys = new Set(), datBroker = '') {
+    // Edit (pencil) feature flag — flip to true to restore the inline editor button.
+    // All edit code (applyRecordEdit, openRecordEditor, the edit click branch) stays
+    // in place; this just controls whether the pencil renders. Delete is unaffected.
+    const EDIT_ENABLED = false;
     // skipFilter = true for exact lane matches — never hide a confirmed match
     // regardless of whether it has a rate/pickup/commodity filled in.
     const filtered = skipFilter ? list : list.filter(r => {
@@ -3004,6 +3085,26 @@ if (so && ro && so !== ro) return false;
     return sorted.slice(0, limit).map((r, i) => {
       const key  = loveKey(r);
       _recPool[key] = r;
+      // CSV-history records (have numeric _f) get edit/delete; DB records never do.
+      // Each gets a non-colliding token → live record ref, so the card maps to its
+      // exact record even when loadNum / origin|dest|date collide.
+      const isCsv = typeof r._f === 'number';
+      let recTok = '';
+      if (isCsv) {
+        // Stable token keyed by record identity → the SAME record rendered in two
+        // sections (Exact Lane Matches + Lane Lookup radius) shares ONE token, so
+        // deleteRecord removes BOTH its card nodes. Also de-dupes _editPool.
+        const sig = _recSig(r);
+        recTok = _sigToken[sig] || (_sigToken[sig] = String(++_editSeq));
+        _editPool[recTok] = r;
+      }
+      const editBtnHtml = (isCsv && EDIT_ENABLED)
+        ? `<button class="dlm-edit-btn" data-rec-token="${recTok}" title="Edit record" style="background:none;border:none;cursor:pointer;font-size:12px;padding:0 1px;line-height:1;opacity:.6">✏️</button>`
+        : '';
+      const editDelBtns = isCsv
+        ? editBtnHtml
+          + `<button class="dlm-del-btn" data-rec-token="${recTok}" title="Delete record" style="background:none;border:none;cursor:pointer;font-size:12px;padding:0 1px;line-height:1;opacity:.6">🗑️</button>`
+        : '';
       const loved = lovedKeys.has(key);
 
       const rate = String(r.rate||'').trim();
@@ -3042,14 +3143,14 @@ if (so && ro && so !== ro) return false;
       const cardColor = isBrokerMatch ? '#9b59b6' : color;
 
       return `
-        <div class="dlm-rec" style="border-left-color:${cardColor};animation-delay:${skipAnim ? 0 : i*.04}s">
+        <div class="dlm-rec"${isCsv ? ` data-rec-token="${recTok}"` : ''} style="border-left-color:${cardColor};animation-delay:${skipAnim ? 0 : i*.04}s">
           <div class="dlm-rh">
             <div style="display:flex;flex-direction:column;gap:2px;max-width:165px;min-width:0">
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
               ${trailerTag}
             </div>
-            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">${gmailBtn}${outlookBtn}${noteBadgeBtn}${heartBtn}<span class="dlm-dt">${esc(dt)}</span></div>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">${gmailBtn}${outlookBtn}${noteBadgeBtn}${heartBtn}${editDelBtns}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
           <div class="dlm-grid">
             <div class="dlm-k">Rate</div><div class="dlm-v dlm-rate">${esc(rd)}</div>
@@ -3062,6 +3163,156 @@ if (so && ro && so !== ro) return false;
           </div>
         </div>`;
     }).join('');
+  }
+
+  // ── In-panel CSV record edit / delete ────────────────────────────────────────
+  // Re-render the current panel from the (now mutated) in-memory indexes, restoring
+  // scroll. For rate/broker/trailer edits the record stays in its buckets so it
+  // re-renders in place; for origin/dest/broker key changes it drops out of the
+  // current lane if it no longer matches; deletes remove it. Mirrors the messy
+  // mapper's capture-before / restore-after scroll pattern.
+  function rerenderPanel() {
+    const ctx = _lastPanelCtx;
+    if (!ctx || !ctx.o) return;
+    const body = document.getElementById('dlm-body');
+    const savedTop = body ? body.scrollTop : 0;
+    const restore = () => { const b = document.getElementById('dlm-body'); if (b) b.scrollTop = savedTop; };
+    const odM = ctx.d ? findOD(ctx.o, ctx.d) : [];
+    const oM  = findO(ctx.o);
+    const bM  = ctx.b ? findBroker(ctx.b, ctx.o) : [];
+    if (ctx.mode === 'dual') {
+      // showPanelDual is async (re-fetches DB); restore scroll once it settles.
+      Promise.resolve(showPanelDual(ctx.o, ctx.d, odM, oM, bM, ctx.b, ctx.node))
+        .finally(() => requestAnimationFrame(restore));
+    } else {
+      showPanel(ctx.o, ctx.d, odM, oM, bM, ctx.b);
+      restore();
+    }
+  }
+
+  // Apply a record edit across all three indexes. vals = {broker,trailer,rate,origin,destination}.
+  async function applyRecordEdit(tok, vals) {
+    const rec = _editPool[tok];
+    if (!rec || typeof rec._f !== 'number') {           // DB guard + identity check
+      console.warn('[LaneIQ] edit aborted — record identity unresolved or non-CSV');
+      return { ok: false, error: 'identity' };
+    }
+    const newOrigin = String(vals.origin || '').trim();
+    if (newOrigin.length < 2) return { ok: false, error: 'origin' }; // origin required (mirrors import drop rule)
+
+    const orig = { ...rec };                              // authoritative ORIGINAL values
+    const sig  = _recSig(orig);
+    const odKeyOld  = normKey(orig.origin) + '|' + normKey(orig.destination);
+    const oKeyOld   = normKey(orig.origin);
+    const brkKeyOld = normBroker(orig.broker);
+
+    // Identity must exist where expected BEFORE we mutate anything.
+    if (!_bucketHas(odIndex, odKeyOld, sig) && !_bucketHas(oIndex, oKeyOld, sig)) {
+      console.warn('[LaneIQ] edit aborted — record not found in index (ambiguous identity)');
+      return { ok: false, error: 'notfound' };
+    }
+
+    const updated = {
+      ...orig,
+      broker:      String(vals.broker || '').trim(),
+      trailer:     String(vals.trailer || '').trim(),
+      rate:        cleanRate(vals.rate),
+      origin:      newOrigin,
+      destination: String(vals.destination || '').trim(),
+    };
+
+    // Remove the exact copy from each old bucket, then add to the new bucket(s).
+    _removeFromBucket(odIndex,     odKeyOld,  sig);
+    _removeFromBucket(oIndex,      oKeyOld,   sig);
+    _removeFromBucket(brokerIndex, brkKeyOld, sig);       // no-op if broker was empty
+
+    const noNew = normKey(updated.origin), ndNew = normKey(updated.destination);
+    if (noNew && ndNew) _addToBucket(odIndex, noNew + '|' + ndNew, { ...updated }); // odIndex needs both
+    if (noNew)          _addToBucket(oIndex,  noNew,                { ...updated });
+    const brkKeyNew = normBroker(updated.broker);
+    if (brkKeyNew)      _addToBucket(brokerIndex, brkKeyNew,        { ...updated });
+
+    const laneCount = countCSVIndex(odIndex);
+    // Edit never adds/removes a record → filesMeta per-file counts untouched.
+    await chrome.storage.local.set({ odIndex, oIndex, brokerIndex, laneCount, indexVersion: INDEX_VERSION });
+    rerenderPanel();
+    return { ok: true };
+  }
+
+  // Delete a record from all three indexes + decrement its file's count.
+  async function deleteRecord(tok) {
+    const rec = _editPool[tok];
+    if (!rec || typeof rec._f !== 'number') {
+      console.warn('[LaneIQ] delete aborted — record identity unresolved or non-CSV');
+      return;
+    }
+    const sig    = _recSig(rec);
+    const odKey  = normKey(rec.origin) + '|' + normKey(rec.destination);
+    const oKey   = normKey(rec.origin);
+    const brkKey = normBroker(rec.broker);
+    if (!_bucketHas(odIndex, odKey, sig) && !_bucketHas(oIndex, oKey, sig)) {
+      console.warn('[LaneIQ] delete aborted — record not found in index (ambiguous identity)');
+      return;
+    }
+    _removeFromBucket(odIndex,     odKey,  sig);
+    _removeFromBucket(oIndex,      oKey,   sig);
+    _removeFromBucket(brokerIndex, brkKey, sig);
+
+    // Decrement the affected file's per-file count (find by _f). Leave the file
+    // entry even at 0 — only the manual file-delete button removes files.
+    const fi = rec._f;
+    if (Array.isArray(filesMeta) && filesMeta[fi] && typeof filesMeta[fi].count === 'number') {
+      filesMeta[fi].count = Math.max(0, filesMeta[fi].count - 1);
+    }
+    const laneCount = countCSVIndex(odIndex);
+    await chrome.storage.local.set({ filesMeta, odIndex, oIndex, brokerIndex, laneCount, indexVersion: INDEX_VERSION });
+    // Visual update: remove EVERY card node for this record — no full re-render, so
+    // the rest of the panel, scroll position, and other cards are left untouched.
+    // The same record can render in two sections (Exact Lane Matches + Lane Lookup
+    // radius); with the stable token both share one data-rec-token, so querySelectorAll
+    // removes all of them together. (openDeleteConfirm only swapped a card's innerHTML,
+    // not the element or its token.) A stale section header left with zero cards is
+    // intentionally left as-is (non-disruptive).
+    document.querySelectorAll('.dlm-rec[data-rec-token="' + tok + '"]').forEach(c => c.remove());
+  }
+
+  // Inline editor — replaces a card's body with 5 prefilled text inputs + Save/Cancel.
+  function openRecordEditor(card, tok) {
+    const r = _editPool[tok];
+    if (!card || !r || typeof r._f !== 'number') return;
+    const IN  = 'width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:6px 8px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box';
+    const BTN = 'padding:6px 14px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer';
+    const CANCEL = 'padding:6px 12px;background:rgba(0,0,0,.06);color:#6e6e73;border:none;border-radius:8px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer';
+    const LBL = 'font-size:9px;font-weight:600;color:#aeaeb2;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px';
+    const field = (label, val, cls) =>
+      `<div style="margin-bottom:6px"><div style="${LBL}">${label}</div><input class="${cls}" type="text" value="${esc(val || '')}" style="${IN}"></div>`;
+    card.innerHTML =
+      `<div style="padding:2px">
+         ${field('Broker', r.broker, 'dlm-ed-broker')}
+         ${field('Equipment', r.trailer, 'dlm-ed-trailer')}
+         ${field('Rate', r.rate, 'dlm-ed-rate')}
+         ${field('From', r.origin, 'dlm-ed-origin')}
+         ${field('To', r.destination, 'dlm-ed-dest')}
+         <div class="dlm-ed-err" style="display:none;font-size:11px;color:#ff3b30;font-weight:600;margin:0 0 6px"></div>
+         <div style="display:flex;gap:6px;justify-content:flex-end">
+           <button class="dlm-edit-cancel" data-rec-token="${tok}" style="${CANCEL}">Cancel</button>
+           <button class="dlm-edit-save" data-rec-token="${tok}" style="${BTN}">Save</button>
+         </div>
+       </div>`;
+  }
+
+  // Inline delete confirmation — replaces a card's body with Confirm/Cancel.
+  function openDeleteConfirm(card, tok) {
+    if (!card) return;
+    const CANCEL = 'padding:6px 12px;background:rgba(0,0,0,.06);color:#6e6e73;border:none;border-radius:8px;font-size:11px;font-weight:600;font-family:inherit;cursor:pointer';
+    card.innerHTML =
+      `<div style="padding:8px 2px;text-align:center">
+         <div style="font-size:12px;color:#1d1d1f;font-weight:600;margin-bottom:8px">Delete this record? This can't be undone.</div>
+         <div style="display:flex;gap:6px;justify-content:center">
+           <button class="dlm-del-cancel" data-rec-token="${tok}" style="${CANCEL}">Cancel</button>
+           <button class="dlm-del-confirm" data-rec-token="${tok}" style="padding:6px 14px;background:#ff3b30;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer">Delete</button>
+         </div>
+       </div>`;
   }
 
   function scheduleBatchHighlight() {
@@ -3256,7 +3507,7 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider','routePopped','routeWindowId','routeCommand','routeClosed']);
 
     if (Number.isFinite(s.dlmRadiusOriginMi)) _radiusOriginMi = s.dlmRadiusOriginMi;
     if (Number.isFinite(s.dlmRadiusDestMi))   _radiusDestMi   = s.dlmRadiusDestMi;
@@ -3281,7 +3532,13 @@ if (so && ro && so !== ro) return false;
         panel.style.display = 'flex';
         if (_activeTab === 'history') switchTab('history');
         const _disabledBody = document.getElementById('dlm-body');
-        if (_disabledBody) _disabledBody.innerHTML = _disabledMsg;
+        // Defense-in-depth: if a re-init fires while the user is on the Setup tab,
+        // preserve the Setup UI (file list / dropzone / toggles) instead of blanking
+        // the body with the empty-source message.
+        if (_disabledBody) {
+          if (_activeTab === 'setup') renderSetupBody(_disabledBody);
+          else _disabledBody.innerHTML = _disabledMsg;
+        }
       }
       _initialized = true;
       return;
@@ -3333,6 +3590,23 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       panel.style.display = 'flex';
       if (_activeTab === 'history') switchTab('history');
     }
+    // Restore the floating RPM/route window flag. The route modal isn't built on
+    // load, so just reconcile the flag with the real window: if the window is gone
+    // (stale flag after a crash/close), clear it so a fresh RPM click opens inline.
+    if (s.routePopped) {
+      chrome.runtime.sendMessage({ type: 'checkRouteWindow' }, (res) => {
+        routePopped = !!res?.exists;
+        if (!routePopped) chrome.storage.local.set({ routePopped: false });
+      });
+    } else {
+      routePopped = false;
+    }
+    // Adopt any existing routeCommand nonce so a stale command left in storage is
+    // never re-applied on the first onChanged that happens to carry it.
+    _routeCmdNonce = s.routeCommand?.nonce || null;
+    // Likewise adopt the last routeClosed token so a stale close (from a previous
+    // session) never tears down a freshly-built modal on first onChanged.
+    _routeClosedNonce = s.routeClosed || null;
     mapsApiKey     = s.mapsApiKey     || '';
     dlmMpg         = +s.dlmMpg         || 6.5;
     dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
@@ -3364,6 +3638,44 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
           panelPopped = changes.panelPopped.newValue || false;
           if (!panelPopped && panel && panelBodyHTML) panel.style.display = 'flex';
         }
+        // Re-show the inline RPM/route modal when its floating window is closed.
+        // routePopped only tracks whether the float window owns the surface. It no
+        // longer re-shows the inline modal on false — closing the float window tears
+        // the modal down COMPLETELY via the distinct 'routeClosed' signal below. The
+        // stale-flag reconciliation paths (init / checkRouteWindow / a fresh modal
+        // built over a dead window) set routePopped:false WITHOUT routeClosed, so they
+        // leave the inline modal exactly as-is (e.g. a just-built modal stays shown).
+        if ('routePopped' in changes) {
+          routePopped = changes.routePopped.newValue || false;
+        }
+        // User closed the floating route window (OS close / onRemoved) → kill
+        // everything: fully tear down the inline modal and do NOT re-show it. Token
+        // dedup so each close fires once; harmless if the modal is already gone.
+        if ('routeClosed' in changes) {
+          const token = changes.routeClosed.newValue;
+          if (token && token !== _routeClosedNonce) {
+            _routeClosedNonce = token;
+            routePopped = false;
+            if (_routeModal && _routeModal.doClose) {
+              _routeModal.doClose();   // normal teardown: panes destroyed, observers off, wrap removed
+            } else {
+              document.getElementById('dlm-route-modal')?.remove();
+            }
+          }
+        }
+        // One-shot command channel from the detached window (the ONLY route → content
+        // signal). Apply each nonce exactly once → no loops; harmlessly dropped if the
+        // inline modal was torn down (_routeModal is null). content.js stays the sole
+        // writer of routeState: applying a command re-pushes the converged set.
+        if ('routeCommand' in changes) {
+          const cmd = changes.routeCommand.newValue;
+          if (cmd && cmd.nonce && cmd.nonce !== _routeCmdNonce) {
+            _routeCmdNonce = cmd.nonce;
+            if (cmd.type === 'closeTab' && _routeModal && _routeModal.closeTabById) {
+              _routeModal.closeTabById(cmd.id);
+            }
+          }
+        }
         // Live-sync Maps key, calculator defaults, and email signature fields
         // so popup edits take effect immediately in already-open DAT tabs.
         if ('mapsApiKey' in changes) {
@@ -3384,7 +3696,12 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if ('filesMeta'  in changes)      filesMeta   = changes.filesMeta.newValue   || [];
         if ('emailTemplates' in changes)  emailTemplates      = changes.emailTemplates.newValue  || DEFAULT_TEMPLATES.map(t => ({...t}));
         if ('activeTemplate' in changes)  activeTemplateIndex = changes.activeTemplate.newValue  ?? 0;
-        if ('useCSV' in changes || 'useDB' in changes || 'laneCount' in changes) {
+        // Full re-index ONLY on a genuine data-source toggle (useCSV/useDB) or a
+        // structural CSV change (upload/import/file-remove, signalled by 'loadedAt').
+        // NOT on 'laneCount' — single-record delete/edit also write laneCount, and a
+        // re-index there caused the flicker + scroll-jump-to-top. Surgical deletes now
+        // do their own single-node DOM removal with no re-render.
+        if ('useCSV' in changes || 'useDB' in changes || 'loadedAt' in changes) {
           clearAllHighlights();
           _initialized = false;
           odIndex = oIndex = brokerIndex = null;
@@ -4109,6 +4426,49 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     return '';
   }
 
+  // ── Static-map framing widener (DUPLICATED VERBATIM in route.js — keep in sync) ─
+  // Decodes the route polyline (plain varint decode — NOT projection math) to get
+  // its lat/lng bounding box, then returns a Google Static Maps "&visible=" rect
+  // padded ~35% on every side (min 0.3°). Google keeps the route centered and draws
+  // the accurate line; the wider viewport gives surrounding cities/states to zoom
+  // out into. One fetch per lane — this only reshapes the cached image's framing.
+  function dlmDecodePolyline(str) {
+    let index = 0, lat = 0, lng = 0; const out = [];
+    while (index < str.length) {
+      let b, shift = 0, result = 0;
+      do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+      shift = 0; result = 0;
+      do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+      out.push([lat / 1e5, lng / 1e5]);
+    }
+    return out;
+  }
+  function dlmVisiblePad(polylines) {
+    let minLat = Infinity, minLng = Infinity, maxLat = -Infinity, maxLng = -Infinity, n = 0;
+    for (const p of polylines) {
+      if (!p) continue;
+      for (const pt of dlmDecodePolyline(p)) {
+        if (pt[0] < minLat) minLat = pt[0]; if (pt[0] > maxLat) maxLat = pt[0];
+        if (pt[1] < minLng) minLng = pt[1]; if (pt[1] > maxLng) maxLng = pt[1];
+        n++;
+      }
+    }
+    if (!n) return '';
+    // Pad fraction scales inversely with route span (max of lat/lng deltas):
+    // ~30% for short lanes (span <= 3°) tapering linearly to ~6% for long
+    // cross-country routes (span >= 25°), clamped to [6%, 30%]. Long routes thus
+    // fill the frame instead of shrinking to a tiny line. Absolute min 0.15°.
+    const span = Math.max(maxLat - minLat, maxLng - minLng);
+    let frac = 0.30 + (span - 3) * ((0.06 - 0.30) / (25 - 3));
+    frac = Math.max(0.06, Math.min(0.30, frac));
+    const pad = Math.max(span * frac, 0.15);
+    const sw = (minLat - pad).toFixed(5) + ',' + (minLng - pad).toFixed(5);
+    const ne = (maxLat + pad).toFixed(5) + ',' + (maxLng + pad).toFixed(5);
+    return '&visible=' + sw + '|' + ne;
+  }
+
   // ── Route modal ──────────────────────────────────────────────────────────────
   // ── Route modal (tabbed: multiple routes, switchable) ───────────────────────
   function showRouteModal(origin, dest, rate, onClose = null) {
@@ -4134,6 +4494,10 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     const titleEl = document.createElement('div');
     titleEl.className = 'dlm-modal-hdr-title';   // mirrors the active tab's lane
     mhdr.appendChild(titleEl);
+    const popoutBtn = document.createElement('button');
+    popoutBtn.className = 'dlm-modal-min';   // reuse the round header-button style
+    popoutBtn.title = 'Pop out to floating window';
+    popoutBtn.textContent = '⤢';
     const minBtn = document.createElement('button');
     minBtn.className = 'dlm-modal-min';
     minBtn.title = 'Minimize';
@@ -4144,7 +4508,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     closeBtn.textContent = '✕';
     const hdrActions = document.createElement('div');
     hdrActions.style.cssText = 'display:flex;align-items:center;gap:6px;flex-shrink:0;';
-    hdrActions.append(minBtn, closeBtn);
+    hdrActions.append(popoutBtn, minBtn, closeBtn);
     mhdr.appendChild(hdrActions);
 
     const tabStrip = document.createElement('div');
@@ -4159,6 +4523,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     // cross-read each other's [data-dlm] inputs. The DH origin watcher is
     // started only in activate() and stopped in deactivate()/destroy().
     function buildPane(origin, dest, rate) {
+      const paneId = ++_paneSeq;   // stable id → reconciliation key in the detached window
       // ── Body ────────────────────────────────────────────────────────────────
       const mbody = document.createElement('div');
       mbody.className = 'dlm-modal-body';
@@ -4174,6 +4539,15 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
 
     // Stored main polyline — set once on load, reused when DH From changes
     let mainPolyline = null;
+    // ── Detach mirroring state (for the floating RPM/route window) ────────────
+    // Tracks what the map currently shows so getState() can hand the floating
+    // window a byte-identical static map + the polylines it needs to redraw a
+    // locally-typed DH leg. _active gates pushes to the one visible pane.
+    let _active        = false;
+    let lastMapUrl     = '';   // current static-map URL ('' while loading/error)
+    let lastMapMsg     = '';   // placeholder text shown when no map URL
+    let lastDhPolyline = null; // DH leg polyline currently drawn (null if none)
+    let lastDhCity     = '';   // DH origin city currently drawn
 
     // Redraws the Static Maps image. Call with a DH polyline + city to show
     // the deadhead leg in gray; omit both to show only the loaded route.
@@ -4181,8 +4555,10 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       mapContainer.innerHTML = '';
       if (!mainPolyline) return;
 
+      // size=640x400 is Google's max framed size (it clamps the size param at 640);
+      // scale=2 returns a 1280x800 landscape PNG — the practical max resolution.
       let url = 'https://laneiq-backend-production.up.railway.app/maps/staticmap' +
-        '?size=800x480&scale=2' +
+        '?size=640x400&scale=2' +
         `&path=color:0x007affff|weight:5|enc:${encodeURIComponent(mainPolyline)}`;
 
       if (dhPolyline && dhCity) {
@@ -4194,15 +4570,56 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         url += `&markers=color:blue|label:A|${encodeURIComponent(origin)}`;
         url += `&markers=color:green|label:B|${encodeURIComponent(dest)}`;
       }
+      // Widen the auto-framed viewport ~35% on all sides so there's surrounding
+      // geography to zoom out into. Google keeps the route centered + draws the
+      // accurate line; this only reshapes framing (one cached fetch per lane).
+      url += dlmVisiblePad(dhPolyline && dhCity ? [mainPolyline, dhPolyline] : [mainPolyline]);
       const img = document.createElement('img');
       img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;';
       img.alt = 'Route map';
       img.src = url;
       mapContainer.appendChild(img);
+      // Zoom/pan the already-loaded static image (no per-zoom network requests).
+      // Fresh attach per render → a new lane always starts at 1x fit.
+      if (window.attachMapZoomPan) window.attachMapZoomPan(mapContainer, img);
+      lastMapUrl = url; lastMapMsg = '';
+      lastDhPolyline = dhPolyline || null; lastDhCity = dhCity || '';
+      pushSelf();
+    }
+
+    // ── Floating-window mirror: capture + push this pane's full state ─────────
+    // getState() is the single payload that fully reconstructs this lane in
+    // route.html. pushSelf() writes it only while this pane is the active,
+    // popped surface — mirrors panelState's onChanged contract.
+    function getState() {
+      return {
+        origin, dest,
+        rate:      q('rate')?.value      || '',
+        miles:     q('miles')?.value     || '',
+        dhFrom:    q('dh-from')?.value    || '',
+        dhMiles:   q('dh')?.value         || '',
+        mpg:       q('mpg')?.value        || '',
+        fuel:      q('fuel')?.value       || '',
+        driverRpm: q('driver-rpm')?.value || '',
+        tolls:     q('tolls')?.value      || '',
+        mainPolyline, dhPolyline: lastDhPolyline, dhCity: lastDhCity,
+        mapUrl:    lastMapUrl,
+        mapMsg:    lastMapMsg,
+        statDist:   q('stat-dist')?.textContent    || '',
+        statDur:    q('stat-dur')?.textContent     || '',
+        statDhDist: q('stat-dh-dist')?.textContent || '',
+        statDhDur:  q('stat-dh-dur')?.textContent  || '',
+      };
+    }
+    // The active pane's data changed (map/DH/stats loaded) → re-serialize ALL tabs.
+    // pushRouteState lives in the shell scope (hoisted) and reads the live tabs[].
+    function pushSelf() {
+      if (routePopped && _active) pushRouteState();
     }
 
     if (origin && dest) {
       mapContainer.innerHTML = '<span style="font-size:13px;color:#8e8e93">Loading map…</span>';
+      lastMapUrl = ''; lastMapMsg = 'Loading map…'; pushSelf();
 
       // Fetch the loaded route first; once mainPolyline is ready, trigger the DH
       // leg via fetchDHRoute so both renders happen in the correct order and
@@ -4214,6 +4631,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
           mapContainer.innerHTML = `<span style="font-size:13px;color:#ff453a">Map unavailable — couldn't load route</span>`;
           const distEl = q('stat-dist');
           if (distEl) distEl.textContent = 'key error';
+          lastMapUrl = ''; lastMapMsg = "Map unavailable — couldn't load route"; pushSelf();
           return;
         }
 
@@ -4235,6 +4653,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         <span>Add a Google Maps API key in LaneIQ settings</span>
         <small>Enable Directions API + Distance Matrix API on the same key</small>
       </div>`;
+      lastMapUrl = ''; lastMapMsg = 'Add a Google Maps API key in LaneIQ settings'; pushSelf();
     }
     left.appendChild(mapContainer);
 
@@ -4431,12 +4850,17 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     // Only the ACTIVE pane runs a DH origin watcher → at most one observer alive.
     function activate() {
       mbody.style.display = '';
+      _active = true;
       if (!dhResolved && dhFromEl) {
         stopOriginWatch = getDATOriginValue(dhFromEl, () => { dhResolved = true; fetchDHRoute(); });
       }
+      // This lane is now the visible/active surface — mirror it to the floating
+      // route window (if popped). Reflects tab switches and new-load openTab().
+      pushSelf();
     }
     function deactivate() {
       mbody.style.display = 'none';
+      _active = false;
       stopOriginWatch(); stopOriginWatch = () => {};
     }
     function destroy() {
@@ -4445,7 +4869,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       mbody.remove();
     }
 
-    return { origin, dest, label, paneEl: mbody, activate, deactivate, destroy };
+    return { id: paneId, origin, dest, label, paneEl: mbody, activate, deactivate, destroy, getState };
     }
     // ===== end buildPane =====
 
@@ -4496,6 +4920,29 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       persistRect();
     };
     minBtn.addEventListener('click', e => { e.stopPropagation(); setCollapsed(!isCollapsed()); });
+
+    // ── Detach → floating RPM/route window (mirrors #dlm-popout on the panel) ──
+    // Writes the active lane's full state to routeState, hides the inline modal
+    // (kept in the DOM so it can be re-shown on close), and asks background.js to
+    // open route.html as a popup. background.js focuses an existing window instead
+    // of opening a duplicate.
+    popoutBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (isCollapsed()) setCollapsed(false);
+      routePopped = true;
+      const b = box.getBoundingClientRect();
+      const chromeH = window.outerHeight - window.innerHeight; // browser toolbar height
+      chrome.storage.local.set({ routePopped: true });
+      pushRouteState();   // serialize ALL current tabs; route.js focuses activeId on first render
+      wrap.style.display = 'none';
+      chrome.runtime.sendMessage({
+        type:   'openRoute',
+        left:   Math.round(window.screenX + b.left),
+        top:    Math.round(window.screenY + chromeH + b.top),
+        width:  Math.round(b.width),
+        height: Math.round(b.height),
+      });
+    });
 
     let mdlDragging = false, mdlOffX = 0, mdlOffY = 0, mdlMoved = false;
     mhdr.style.cursor = 'grab';
@@ -4585,6 +5032,28 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     const tabs = [];            // pane objects, insertion order, MAX 5
     let activeIdx = -1;
 
+    // Serialize EVERY pane (background panes' getState() works while hidden) into the
+    // multi-lane routeState the detached window reconciles against. content.js is the
+    // SOLE writer of routeState. newId, when set, tells route.js to auto-focus a tab
+    // that was just added (mirrors openTab's switch-to-new).
+    function pushRouteState(newId) {
+      if (!routePopped) return;
+      chrome.storage.local.set({ routeState: {
+        v: 2,
+        tabs: tabs.map(p => ({ id: p.id, ...p.getState() })),
+        activeId: tabs[activeIdx] ? tabs[activeIdx].id : null,
+        newId: (newId != null) ? newId : null,
+        rev: ++_routeRev,
+      }});
+    }
+
+    // Close a pane by its stable id — entry point for the detached window's × (via
+    // the routeCommand channel). No-op if the id is already gone (harmless drop).
+    function closeTabById(id) {
+      const i = tabs.findIndex(t => t.id === id);
+      if (i >= 0) closeTab(i);
+    }
+
     function renderTabStrip() {
       tabStrip.innerHTML = '';
       tabs.forEach((pane, i) => {
@@ -4619,7 +5088,12 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       const wasActive = (i === activeIdx);
       tabs[i].destroy();
       tabs.splice(i, 1);
-      if (tabs.length === 0) { doClose(); return; }
+      if (tabs.length === 0) {
+        // Last tab gone — signal the detached window to clear before teardown.
+        if (routePopped) chrome.storage.local.set({ routeState: { v: 2, tabs: [], activeId: null, newId: null, rev: ++_routeRev } });
+        doClose();
+        return;
+      }
       if (wasActive) {
         // Active pane is gone (destroyed) — force-activate a neighbor.
         activeIdx = -1;
@@ -4629,6 +5103,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if (i < activeIdx) activeIdx -= 1;
         renderTabStrip();
       }
+      pushRouteState();   // mirror the removal to the detached window
     }
 
     function openTab(o, d, r) {
@@ -4642,6 +5117,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       // Do NOT reset activeIdx — switchTab must deactivate the currently-active
       // pane (hide it) before showing the new one, else panes overlap.
       switchTab(tabs.length - 1);
+      pushRouteState(pane.id);   // detached window adds + auto-focuses this new tab
     }
 
     // ===== Close (tears down shell + ALL panes → zero observers survive) =====
@@ -4665,10 +5141,26 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     const onKey = e => { if (e.key === 'Escape') doClose(); };
     document.addEventListener('keydown', onKey);
     _routeModalTeardown = doClose;
-    _routeModal = { box, openTab, switchTab, closeTab, doClose };
+    _routeModal = { box, openTab, switchTab, closeTab, closeTabById, doClose };
 
     // Open the first tab for this lane.
     openTab(origin, dest, rate);
+
+    // If a floating route window already owns the surface (e.g. after a page
+    // reload, or a fresh RPM click while popped), keep this inline shell hidden —
+    // openTab()/activate() already pushed routeState so the floating window
+    // updated. Verify the window still exists; if it's gone (stale flag), fall
+    // back to showing inline.
+    if (routePopped) {
+      chrome.runtime.sendMessage({ type: 'checkRouteWindow' }, (res) => {
+        if (res && res.exists) {
+          wrap.style.display = 'none';
+        } else {
+          routePopped = false;
+          chrome.storage.local.set({ routePopped: false });
+        }
+      });
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

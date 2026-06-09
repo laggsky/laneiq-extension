@@ -7,6 +7,35 @@ chrome.runtime.onInstalled.addListener((details) => {
   }
 });
 
+// Opens route.html as a popup window and tracks its lifecycle. On close (the
+// authoritative onRemoved event), emits a distinct 'routeClosed' token so content.js
+// tears the inline modal down COMPLETELY — it does NOT re-show. (routePopped:false on
+// its own no longer re-docks; only this explicit close kills everything.)
+function createRouteWindow(msg) {
+  chrome.windows.create({
+    url:    chrome.runtime.getURL('route.html'),
+    type:   'popup',
+    left:   msg.left   ?? 120,
+    top:    msg.top    ?? 120,
+    width:  msg.width  ?? 1100,
+    height: msg.height ?? 620,
+  }, (win) => {
+    if (!win) return;
+    const routeWindowId = win.id;
+    chrome.storage.local.set({ routeWindowId: win.id });
+    const onRemoved = (closedId) => {
+      if (closedId !== routeWindowId) return;
+      chrome.windows.onRemoved.removeListener(onRemoved);
+      chrome.storage.local.set({
+        routePopped: false,
+        routeWindowId: null,
+        routeClosed: Date.now() + '-' + Math.random().toString(36).slice(2), // unique close token
+      });
+    };
+    chrome.windows.onRemoved.addListener(onRemoved);
+  });
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // Open a URL and scroll to a hash anchor after the page fully loads.
   // Doing this in the service worker avoids the popup-close race condition
@@ -45,6 +74,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       chrome.windows.onRemoved.addListener(onRemoved);
     });
     return false;
+  }
+
+  // Floating RPM/map route window. Mirrors openPanel/checkPanelWindow but tracks
+  // its own routeWindowId/routePopped keys (no collision with the data panel) and
+  // focuses an existing window instead of opening a duplicate.
+  if (msg.type === 'openRoute') {
+    chrome.storage.local.get(['routeWindowId'], (s) => {
+      if (s.routeWindowId) {
+        chrome.windows.update(s.routeWindowId, { focused: true }, (win) => {
+          if (chrome.runtime.lastError || !win) createRouteWindow(msg);
+        });
+      } else {
+        createRouteWindow(msg);
+      }
+    });
+    return false;
+  }
+
+  if (msg.type === 'checkRouteWindow') {
+    chrome.storage.local.get(['routeWindowId'], (s) => {
+      if (!s.routeWindowId) { sendResponse({ exists: false }); return; }
+      chrome.windows.get(s.routeWindowId, (win) => {
+        if (chrome.runtime.lastError || !win) {
+          chrome.storage.local.set({ routePopped: false, routeWindowId: null });
+          sendResponse({ exists: false });
+        } else {
+          sendResponse({ exists: true });
+        }
+      });
+    });
+    return true;
   }
 
   if (msg.type === 'checkPanelWindow') {

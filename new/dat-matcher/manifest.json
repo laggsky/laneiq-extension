@@ -46,6 +46,7 @@
         "*://one.dat.com/*"
       ],
       "js": [
+        "mapzoom.js",
         "content.js"
       ],
       "css": [

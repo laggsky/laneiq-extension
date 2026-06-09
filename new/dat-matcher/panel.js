@@ -917,7 +917,9 @@
         odI = reIndexCSVFiles(odI, idx); oI = reIndexCSVFiles(oI, idx); bI = reIndexCSVFiles(bI, idx);
         const newMeta = meta.filter((_, i) => i !== idx);
         const count   = countCSVIndex(odI);
-        await chrome.storage.local.set({ filesMeta: newMeta, odIndex: odI, oIndex: oI, brokerIndex: bI, laneCount: count });
+        // loadedAt marks a structural CSV change so content.js re-indexes (refreshes
+        // DAT highlights) when a file is removed from the popped-out window too.
+        await chrome.storage.local.set({ filesMeta: newMeta, odIndex: odI, oIndex: oI, brokerIndex: bI, laneCount: count, loadedAt: new Date().toISOString() });
         filesMeta = newMeta;
         if (_activeTab === 'setup') renderSetupBody(e.currentTarget);
         return;

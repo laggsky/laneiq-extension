@@ -28,7 +28,7 @@
 .dlm-b-purple { background:#a78bfa; color:#1e1b4b; }
 
 /* ── Panel ─────────────────────────────────────────────────────── */
-#dlm-panel { position:fixed; top:70px; right:16px; width:450px; height:72vh; max-height:none; background:#f5f5f7; border:none; border-radius:18px; z-index:2147483647; display:none; flex-direction:column; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif; box-shadow:0 24px 64px rgba(0,0,0,.16),0 4px 20px rgba(0,0,0,.09); overflow:hidden; }
+#dlm-panel { position:fixed; top:134px; right:16px; width:450px; height:72vh; max-height:none; background:rgba(255,255,255,.62); backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%); border:1px solid rgba(255,255,255,.7); border-radius:18px; z-index:2147483647; display:none; flex-direction:column; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif; box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 24px 64px rgba(0,0,0,.16),0 4px 20px rgba(0,0,0,.09); overflow:hidden; }
 #dlm-panel.dlm-minimized {
   max-height:none; height:auto !important;
   /* Stand out against a white DAT page when collapsed — SAME treatment as the
@@ -54,7 +54,7 @@
 #dlm-bottom:hover, #dlm-panel.dlm-resizing #dlm-bottom { background:rgba(0,0,0,.07); }
 
 /* Header */
-#dlm-panel-hdr { background:#ffffff; border-bottom:1px solid rgba(0,0,0,.06); padding:13px 14px 13px 16px; display:flex; align-items:center; justify-content:space-between; cursor:grab; user-select:none; flex-shrink:0; }
+#dlm-panel-hdr { background:transparent; border-bottom:1px solid rgba(0,0,0,.06); padding:13px 14px 13px 16px; display:flex; align-items:center; justify-content:space-between; cursor:grab; user-select:none; flex-shrink:0; }
 #dlm-panel-hdr:active { cursor:grabbing; }
 #dlm-panel-hdr span { font-size:13px; font-weight:600; letter-spacing:-.01em; color:#1d1d1f; text-transform:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #dlm-panel-hdr small { font-size:11px; color:#aeaeb2; margin-left:5px; font-weight:400; letter-spacing:0; text-transform:none; }
@@ -169,11 +169,11 @@ html body [data-dlm-route-ok]:active {
 }
 .dlm-modal-overlay { display:none; }   /* backdrop removed — DAT visible/usable underneath */
 .dlm-modal {
-  position:fixed; pointer-events:auto; background:#fff; border-radius:16px;
+  position:fixed; pointer-events:auto; background:rgba(255,255,255,.62); backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%); border-radius:16px;
   /* Standout treatment so the expanded modal doesn't get lost on a white DAT
      page — same deeper shadow + 1px border as the collapsed bar. */
-  box-shadow:0 18px 44px rgba(0,0,0,.34),0 4px 12px rgba(0,0,0,.22);
-  border:1px solid rgba(0,0,0,.16);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 18px 44px rgba(0,0,0,.34),0 4px 12px rgba(0,0,0,.22);
+  border:1px solid rgba(255,255,255,.7);
   width:1222px; max-width:calc(100vw - 48px); max-height:calc(100vh - 72px);
   min-width:520px; min-height:360px;
   display:flex; flex-direction:column; overflow:hidden;
@@ -198,9 +198,10 @@ html body [data-dlm-route-ok]:active {
 .dlm-modal-hdr {
   display:flex; align-items:center; justify-content:space-between;
   padding:16px 20px; border-bottom:1px solid rgba(0,0,0,.07); flex-shrink:0;
-  /* Match the Load History side panel header (#dlm-panel-hdr) exactly — solid
-     white so it never picks up the map/page behind it. */
-  background:#ffffff;
+  /* Transparent so the .dlm-modal frame's glass (rgba .62 + backdrop blur)
+     shows through this header strip — the single glass layer, mirroring
+     #dlm-panel-hdr on the side panel. No second backdrop-filter here. */
+  background:transparent;
 }
 .dlm-modal-hdr-title { font-size:15px; font-weight:600; color:#1d1d1f; letter-spacing:-.02em; }
 .dlm-modal-hdr-title span { color:#aeaeb2; margin:0 6px; font-weight:300; }
@@ -234,7 +235,7 @@ html body [data-dlm-route-ok]:active {
   padding:2px 3px; line-height:1; border-radius:50%; flex-shrink:0;
 }
 .dlm-modal-tab-x:hover { background:rgba(0,0,0,.12); color:#1d1d1f; }
-.dlm-modal-panes { flex:1; min-height:0; display:flex; }
+.dlm-modal-panes { flex:1; min-height:0; display:flex; background:#fff; }  /* solid backing — keeps map tiles + RPM rows fully opaque over the frosted frame */
 
 /* Minimized: collapse to the header bar only; stays draggable, keeps left/top. */
 .dlm-modal.dlm-modal-collapsed {
@@ -271,6 +272,21 @@ html body [data-dlm-route-ok]:active {
 }
 .dlm-map-stat       { font-size:13px; font-weight:600; color:#1d1d1f; }
 .dlm-map-stat-sep   { color:#c7c7cc; }
+
+/* Static-map zoom/pan controls (shared: inline modal + floating route window) */
+.dlm-map-zoom {
+  position:absolute; right:10px; bottom:10px; z-index:4;
+  display:flex; flex-direction:column; gap:4px;
+}
+.dlm-map-zoom-btn {
+  width:30px; height:30px; border:none; border-radius:8px; cursor:pointer;
+  background:rgba(255,255,255,.92); color:#1d1d1f; font-size:17px; font-weight:600;
+  line-height:1; display:flex; align-items:center; justify-content:center;
+  box-shadow:0 1px 4px rgba(0,0,0,.25); transition:background .12s;
+  font-family:-apple-system,'SF Pro Text',BlinkMacSystemFont,system-ui,sans-serif;
+}
+.dlm-map-zoom-btn:hover { background:#fff; }
+.dlm-map-zoom-btn:active { background:#f0f0f2; }
 
 /* Calculator column */
 .dlm-modal-right {
