@@ -3103,7 +3103,7 @@ if (so && ro && so !== ro) return false;
         : '';
       const editDelBtns = isCsv
         ? editBtnHtml
-          + `<button class="dlm-del-btn" data-rec-token="${recTok}" title="Delete record" style="background:none;border:none;cursor:pointer;font-size:12px;padding:0 1px;line-height:1;opacity:.6">🗑️</button>`
+          + `<button class="dlm-del-btn" data-rec-token="${recTok}" title="Delete record" style="background:none;border:none;cursor:pointer;padding:0;width:24px;height:24px;line-height:0;color:#9aa1ab;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:-6px" onmouseover="this.style.color='#ff3b30'" onmouseout="this.style.color='#9aa1ab'"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`
         : '';
       const loved = lovedKeys.has(key);
 

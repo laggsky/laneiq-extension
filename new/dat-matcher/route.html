@@ -11,17 +11,27 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body { width: 100%; height: 100%; overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
-      background: #fff; }
+      /* Faint cool window matte (chrome) so the glass rim + frosted header read
+         with depth. A standalone OS popup is opaque, so true backdrop-blur can't
+         show — these rim/sheen/gradient cues mirror the inline modal's glass. The
+         content panes below stay solid #fff (data crisp). */
+      background: #e9edf3; }
 
-    /* Full-window flex column — mirrors .dlm-modal layout without fixed
-       positioning, drag, resize, or the minimize/close chrome (the OS window
-       handles all of that). */
-    #route-wrap { display: flex; flex-direction: column; height: 100vh; }
+    /* Full-window flex column — mirrors .dlm-modal layout. Bright liquid-glass rim:
+       top sheen + inner rim, matching .dlm-modal's frame. */
+    #route-wrap { display: flex; flex-direction: column; height: 100vh;
+      border: 1px solid rgba(255,255,255,.7);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.7), inset 0 0 0 1px rgba(255,255,255,.15); }
 
-    /* Header bar — mirrors .dlm-modal-hdr; no buttons (OS window owns them). */
+    /* Header bar — mirrors .dlm-modal-hdr; no buttons (OS window owns them).
+       Fixed 48px (border-box includes the 1px border) to match the Load History
+       header / inline route-modal header height exactly. */
     #route-hdr {
-      display: flex; align-items: center; padding: 14px 18px;
-      border-bottom: 1px solid rgba(0,0,0,.07); flex-shrink: 0; background: #fff;
+      display: flex; align-items: center; padding: 0 18px; height: 48px;
+      border-bottom: 1px solid rgba(0,0,0,.07); flex-shrink: 0;
+      /* Frosted top-lit sheen over the cool matte — mirrors .dlm-modal-hdr's glass
+         header. Title text stays dark + legible. No backdrop-filter (opaque window). */
+      background: linear-gradient(180deg, rgba(255,255,255,.7), rgba(255,255,255,.25));
     }
     #route-title { font-size: 15px; font-weight: 600; color: #1d1d1f; letter-spacing: -.02em; }
     #route-title span { color: #aeaeb2; margin: 0 6px; font-weight: 300; }

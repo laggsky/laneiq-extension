@@ -28,7 +28,7 @@
 .dlm-b-purple { background:#a78bfa; color:#1e1b4b; }
 
 /* ── Panel ─────────────────────────────────────────────────────── */
-#dlm-panel { position:fixed; top:134px; right:16px; width:450px; height:72vh; max-height:none; background:rgba(255,255,255,.62); backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%); border:1px solid rgba(255,255,255,.7); border-radius:18px; z-index:2147483647; display:none; flex-direction:column; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif; box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 24px 64px rgba(0,0,0,.16),0 4px 20px rgba(0,0,0,.09); overflow:hidden; }
+#dlm-panel { position:fixed; top:134px; right:16px; width:450px; height:72vh; max-height:none; background:rgba(255,255,255,.55); backdrop-filter:blur(24px) saturate(180%); -webkit-backdrop-filter:blur(24px) saturate(180%); border:1px solid rgba(255,255,255,.7); border-radius:18px; z-index:2147483647; display:none; flex-direction:column; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif; box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 1px rgba(255,255,255,.15),0 24px 64px rgba(0,0,0,.16),0 4px 20px rgba(0,0,0,.09); overflow:hidden; }
 #dlm-panel.dlm-minimized {
   max-height:none; height:auto !important;
   /* Stand out against a white DAT page when collapsed — SAME treatment as the
@@ -54,7 +54,9 @@
 #dlm-bottom:hover, #dlm-panel.dlm-resizing #dlm-bottom { background:rgba(0,0,0,.07); }
 
 /* Header */
-#dlm-panel-hdr { background:transparent; border-bottom:1px solid rgba(0,0,0,.06); padding:13px 14px 13px 16px; display:flex; align-items:center; justify-content:space-between; cursor:grab; user-select:none; flex-shrink:0; }
+/* Header: faint top-lit sheen over the frame glass (NO second backdrop-filter —
+   the panel frame is the single glass layer). Title text stays dark + legible. */
+#dlm-panel-hdr { background:linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,.1)); border-bottom:1px solid rgba(0,0,0,.06); padding:10.5px 14px 10.5px 16px; display:flex; align-items:center; justify-content:space-between; cursor:grab; user-select:none; flex-shrink:0; }
 #dlm-panel-hdr:active { cursor:grabbing; }
 #dlm-panel-hdr span { font-size:13px; font-weight:600; letter-spacing:-.01em; color:#1d1d1f; text-transform:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #dlm-panel-hdr small { font-size:11px; color:#aeaeb2; margin-left:5px; font-weight:400; letter-spacing:0; text-transform:none; }
@@ -169,10 +171,10 @@ html body [data-dlm-route-ok]:active {
 }
 .dlm-modal-overlay { display:none; }   /* backdrop removed — DAT visible/usable underneath */
 .dlm-modal {
-  position:fixed; pointer-events:auto; background:rgba(255,255,255,.62); backdrop-filter:blur(20px) saturate(180%); -webkit-backdrop-filter:blur(20px) saturate(180%); border-radius:16px;
+  position:fixed; pointer-events:auto; background:rgba(255,255,255,.55); backdrop-filter:blur(24px) saturate(180%); -webkit-backdrop-filter:blur(24px) saturate(180%); border-radius:16px;
   /* Standout treatment so the expanded modal doesn't get lost on a white DAT
-     page — same deeper shadow + 1px border as the collapsed bar. */
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.6),0 18px 44px rgba(0,0,0,.34),0 4px 12px rgba(0,0,0,.22);
+     page — stronger liquid-glass rim: top sheen + inner rim + deep drop shadow. */
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.7),inset 0 0 0 1px rgba(255,255,255,.15),0 18px 44px rgba(0,0,0,.34),0 4px 12px rgba(0,0,0,.22);
   border:1px solid rgba(255,255,255,.7);
   width:1222px; max-width:calc(100vw - 48px); max-height:calc(100vh - 72px);
   min-width:520px; min-height:360px;
@@ -197,26 +199,30 @@ html body [data-dlm-route-ok]:active {
 .dlm-modal.dlm-modal-collapsed .dlm-mrz { display:none; }
 .dlm-modal-hdr {
   display:flex; align-items:center; justify-content:space-between;
-  padding:16px 20px; border-bottom:1px solid rgba(0,0,0,.07); flex-shrink:0;
-  /* Transparent so the .dlm-modal frame's glass (rgba .62 + backdrop blur)
-     shows through this header strip — the single glass layer, mirroring
-     #dlm-panel-hdr on the side panel. No second backdrop-filter here. */
-  background:transparent;
+  /* Match #dlm-panel-hdr height: same 10.5px vertical padding + 26px buttons + 1px
+     border = 48px, so the route header is as thin as the Load History header. */
+  padding:10.5px 16px; border-bottom:1px solid rgba(0,0,0,.07); flex-shrink:0;
+  /* Faint top-lit sheen over the .dlm-modal frame glass — NO second backdrop-filter
+     here (the frame is the single glass layer), so the blur still reads through this
+     translucent-white gradient. Title text stays dark + legible. */
+  background:linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,.1));
 }
 .dlm-modal-hdr-title { font-size:15px; font-weight:600; color:#1d1d1f; letter-spacing:-.02em; }
 .dlm-modal-hdr-title span { color:#aeaeb2; margin:0 6px; font-weight:300; }
+/* Flat/plain buttons matching the Load History panel (#dlm-close etc.): no grey
+   circle at rest (transparent background), faint circular hover only. */
 .dlm-modal-close {
-  background:rgba(0,0,0,.06); border:none; border-radius:50%;
-  width:28px; height:28px; display:flex; align-items:center; justify-content:center;
-  cursor:pointer; font-size:14px; color:#6e6e73; transition:background .12s; flex-shrink:0;
+  background:none; border:none; border-radius:50%; padding:0;
+  width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+  cursor:pointer; font-size:14px; color:#6e6e73; transition:background .15s; flex-shrink:0;
 }
-.dlm-modal-close:hover { background:rgba(0,0,0,.12); color:#1d1d1f; }
+.dlm-modal-close:hover { background:rgba(0,0,0,.06); color:#1d1d1f; }
 .dlm-modal-min {
-  background:rgba(0,0,0,.06); border:none; border-radius:50%;
-  width:28px; height:28px; display:flex; align-items:center; justify-content:center;
-  cursor:pointer; font-size:14px; color:#6e6e73; transition:background .12s; flex-shrink:0;
+  background:none; border:none; border-radius:50%; padding:0;
+  width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+  cursor:pointer; font-size:14px; color:#6e6e73; transition:background .15s; flex-shrink:0;
 }
-.dlm-modal-min:hover { background:rgba(0,0,0,.12); color:#1d1d1f; }
+.dlm-modal-min:hover { background:rgba(0,0,0,.06); color:#1d1d1f; }
 /* Tab strip + panes (multi-route tabbed modal) */
 .dlm-modal-tabs {
   display:flex; gap:4px; padding:6px 10px 0; flex-shrink:0;
@@ -339,9 +345,10 @@ html body [data-dlm-route-ok]:active {
 .dlm-tpl-area:focus { border-color:#0058e0; background:#fff; box-shadow:0 0 0 2px rgba(0,88,224,.12); }
 
 /* ── Heart (Loved) button ───────────────────────────────────────────────────── */
-.dlm-heart-btn { background:none; border:none; cursor:pointer; font-size:20px; font-weight:700; color:#c7c7cc; padding:0; width:28px; line-height:1; display:inline-flex; align-items:center; justify-content:center; transition:color .15s; flex-shrink:0; }
-.dlm-heart-btn:hover { opacity:.75; }
+.dlm-heart-btn { background:none; border:none; cursor:pointer; font-size:16px; font-weight:700; color:#c7c7cc; padding:0; width:24px; height:24px; line-height:1; display:inline-flex; align-items:center; justify-content:center; transition:color .15s; flex-shrink:0; }
+.dlm-heart-btn:hover { color:#e05c5c; }
 .dlm-heart-btn.dlm-loved { color:#e05c5c; }
+.dlm-heart-btn.dlm-loved:hover { color:#c0392b; }
 
 /* ── Note badge ─────────────────────────────────────────────────────────────── */
 .dlm-note-badge { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:500; padding:4px 11px; border-radius:20px; border:1.5px solid #d1d1d6; background:transparent; color:#8e8e93; cursor:pointer; white-space:nowrap; font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text',system-ui,sans-serif; transition:border-color .15s,background .15s,color .15s; flex-shrink:0; line-height:1; letter-spacing:-.01em; }

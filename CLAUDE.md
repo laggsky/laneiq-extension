@@ -32,9 +32,9 @@
 ---
 
 ## Current Version
-- Manifest: 1.36
-- Chrome Store target: v1.36 (messy CSV mapper + panel viewport clamp/resize fixes)
-- Last submitted to store: v1.35 (June 7 2026 — packaged WITHOUT the messy CSV mapper; superseded by 1.36)
+- Manifest: 1.37
+- Chrome Store target: v1.37 (messy CSV mapper; per-record delete with stable tokens + no-flicker; file-remove Setup-tab fix; detached RPM window with tabs + DH sync + close-completely; map zoom/pan + wider framing; panel/route glass + 48px headers + flat buttons + delete-icon swap; removed dead processSetupCSV/parseCSV)
+- Last submitted to store: v1.35 (June 7 2026 — packaged WITHOUT the messy CSV mapper; superseded by 1.36/1.37)
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
 A stale v1.29 once shipped because code landed but the manifest was never
