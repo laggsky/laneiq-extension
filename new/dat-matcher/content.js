@@ -139,6 +139,7 @@
       body: 'Available from {origin} to {destination} on {date}.\n\n{signature}' },
   ];
   let _dbMatchCache = {};
+  let _messy = null; // messy-file cleaner/mapper transient state (additive feature; never persisted)
   let _lastClickedRow = null;
   let _lastExpandKey = '';
   let _lastExpandTime = 0;
@@ -1422,18 +1423,15 @@ if (so && ro && so !== ro) return false;
       <div style="${CARD}">
         <div style="${LABEL}">Freight History CSV</div>
         <div id="dlm-setup-file-list">${fileListHTML}</div>
-        <div id="dlm-setup-dropzone" style="border:2px dashed rgba(0,0,0,.12);border-radius:10px;padding:16px;text-align:center;cursor:pointer;margin-top:8px;background:#fafafa;transition:border-color .15s,background .15s">
-          <div style="font-size:20px;color:#aeaeb2;margin-bottom:5px">📂</div>
-          <div style="font-size:12px;font-weight:600;color:#6e6e73">Drop CSV files here</div>
-          <div style="font-size:11px;color:#aeaeb2;margin-top:2px">or click to browse</div>
-          <input id="dlm-setup-file-input" type="file" accept=".csv" multiple style="display:none">
-        </div>
-        <div id="dlm-setup-progress" style="display:none;margin-top:8px">
-          <div style="height:3px;background:rgba(0,0,0,.08);border-radius:2px;overflow:hidden">
-            <div id="dlm-setup-progress-fill" style="height:100%;background:#0058e0;width:0%;transition:width .3s"></div>
+        <div id="dlm-setup-dropzone" style="border:2px dashed #d1d1d6;border-radius:12px;padding:24px 16px;text-align:center;cursor:pointer;margin-top:8px;background:#fff;transition:border-color .15s,background .15s">
+          <div style="width:48px;height:48px;margin:0 auto 12px;border-radius:12px;background:#0058e0;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,88,224,.25)">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
           </div>
-          <div id="dlm-setup-progress-text" style="font-size:10px;color:#aeaeb2;margin-top:4px;text-align:center">Processing…</div>
+          <div style="font-size:15px;font-weight:700;color:#1d1d1f">Drop your CSV here</div>
+          <div style="font-size:11px;color:#aeaeb2;margin-top:4px">or click to choose · everything stays on your device</div>
+          <input id="dlm-setup-file-input" type="file" accept=".csv,.txt,.tsv" multiple style="display:none">
         </div>
+        <div id="dlm-messy-panel" style="margin-top:10px"></div>
       </div>
 
       <div style="${CARD}">
@@ -1481,16 +1479,27 @@ if (so && ro && so !== ro) return false;
            </div>`).join('')}
       </div>`;
 
-    // Wire drop zone after innerHTML is set
+    // Wire the unified dropzone — every file routes into the messy mapper so the
+    // user confirms/adjusts column mappings each time, then clicks Clean & Import.
+    // The mapper handles ONE file at a time, so we take the first dropped/chosen file.
     const dz  = bodyEl.querySelector('#dlm-setup-dropzone');
     const fi  = bodyEl.querySelector('#dlm-setup-file-input');
     if (dz && fi) {
       dz.addEventListener('click',     () => fi.click());
       dz.addEventListener('dragover',  e => { e.preventDefault(); dz.style.borderColor='#0058e0'; dz.style.background='rgba(0,88,224,.04)'; });
-      dz.addEventListener('dragleave', () => { dz.style.borderColor=''; dz.style.background='#fafafa'; });
-      dz.addEventListener('drop',      e => { e.preventDefault(); dz.style.borderColor=''; dz.style.background='#fafafa'; processSetupCSV(Array.from(e.dataTransfer.files), bodyEl); });
-      fi.addEventListener('change',    e => processSetupCSV(Array.from(e.target.files), bodyEl));
+      dz.addEventListener('dragleave', () => { dz.style.borderColor='#d1d1d6'; dz.style.background='#fff'; });
+      dz.addEventListener('drop',      async e => {
+        e.preventDefault(); dz.style.borderColor='#d1d1d6'; dz.style.background='#fff';
+        const f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) await openMessyFile(f, bodyEl);
+      });
+      fi.addEventListener('change', async e => {
+        const f = e.target.files && e.target.files[0];
+        if (f) await openMessyFile(f, bodyEl);
+        e.target.value = ''; // allow re-selecting the same file
+      });
     }
+    if (_messy) renderMessyPanel(bodyEl); // restore mapping view across re-renders
     // Wire data source toggles after innerHTML
     const csvToggle = bodyEl.querySelector('#dlm-setup-csv-toggle');
     const dbToggle  = bodyEl.querySelector('#dlm-setup-db-toggle');
@@ -1546,6 +1555,357 @@ if (so && ro && so !== ro) return false;
     await chrome.storage.local.set({ filesMeta: combinedMeta, odIndex: existingOD, oIndex: existingO, brokerIndex: existingBrk, laneCount: totalCount, indexVersion: INDEX_VERSION, loadedAt: new Date().toISOString() });
     filesMeta = combinedMeta;
     if (progress) { progressFill.style.width = '100%'; progressText.textContent = `Done — ${totalCount.toLocaleString()} lanes`; setTimeout(() => { progress.style.display = 'none'; renderSetupBody(bodyEl); }, 1200); }
+  }
+
+  // ── Messy CSV cleaner / column mapper ────────────────────────────────────────
+  // Fully additive. Never modifies the existing upload path, parseCSV,
+  // buildIndexesFromCSVRows, mergeCSVIndexes, or the delete handler. Handles
+  // headerless / wrong-header / odd-delimiter exports, lets the user map columns
+  // by looking at the data, then funnels mapped rows through the EXACT SAME
+  // buildIndexesFromCSVRows + append-merge as processSetupCSV (facts #2/#3).
+  // Everything is local — no network, no download.
+
+  // Canonical fields, in required order. `ignore` is the default per column.
+  const MAP_FIELDS = [
+    { key: 'ignore',    label: '— ignore —' },
+    { key: 'origin',    label: 'Origin (required)' },
+    { key: 'puDate',    label: 'PU Date' },
+    { key: 'dest',      label: 'Destination' },
+    { key: 'weight',    label: 'Weight / Pallets / FT' },
+    { key: 'rate',      label: 'Rate' },
+    { key: 'trailer',   label: 'Trailer' },
+    { key: 'pickup',    label: 'Pickup Company + Full Address' },
+    { key: 'delivery',  label: 'Delivery Company + Full Address' },
+    { key: 'commodity', label: 'Commodity' },
+    { key: 'broker',    label: 'Broker' },
+    { key: 'loadNum',   label: 'Load #' },
+  ];
+  // Field key -> the canonical CSV header buildIndexesFromCSVRows reads.
+  // (trailer -> 'Trailer' is matched case-insensitively by its TRAILER_HEADERS.)
+  const FIELD_HEADER = {
+    origin: 'Origin', puDate: 'PU Date', dest: 'Destination',
+    weight: 'Weight / Pallets / FT', rate: 'Rate', trailer: 'Trailer',
+    pickup: 'Pickup Company + Full Address', delivery: 'Delivery Company + Full Address',
+    commodity: 'Commodity', broker: 'Broker', loadNum: 'Load #',
+  };
+  // Header-name aliases -> field key (mirrors aliases recognized in
+  // buildIndexesFromCSVRows, plus common TMS/broker export labels).
+  const HEADER_ALIAS = {
+    'origin':'origin','pickcity':'origin','pick city':'origin','origin city':'origin','from city':'origin','shipper city':'origin','pickup city':'origin','pu city':'origin',
+    'destination':'dest','dropcity':'dest','drop city':'dest','destination city':'dest','to city':'dest','consignee city':'dest','delivery city':'dest','del city':'dest',
+    'pu date':'puDate','pickup date':'puDate','ship date':'puDate','pick up date':'puDate','date':'puDate','pu':'puDate',
+    'weight / pallets / ft':'weight','weight':'weight','wt':'weight','weight (lbs)':'weight','gross weight':'weight','grossweight':'weight','pallets':'weight','pieces':'weight',
+    'rate':'rate','total':'rate','gross':'rate','revenue':'rate','total rate':'rate','all in':'rate','all-in':'rate','pay':'rate','line haul':'rate','linehaul':'rate','amount':'rate',
+    'trailer':'trailer','trailer type':'trailer','equipment':'trailer','equip':'trailer','eq':'trailer','equipment type':'trailer',
+    'pickup company + full address':'pickup','pickup company':'pickup','pickup address':'pickup','shipper':'pickup','origin address':'pickup','pickup name':'pickup',
+    'delivery company + full address':'delivery','delivery company':'delivery','delivery address':'delivery','consignee':'delivery','destination address':'delivery','delivery name':'delivery',
+    'commodity':'commodity','freight':'commodity','product':'commodity','commodity type':'commodity',
+    'broker':'broker','broker company name':'broker','customer':'broker','broker name':'broker','customer name':'broker',
+    'load #':'loadNum','load':'loadNum','load number':'loadNum','load#':'loadNum','pro #':'loadNum','pro number':'loadNum','reference':'loadNum','ref':'loadNum','ref #':'loadNum','order':'loadNum','order #':'loadNum','load id':'loadNum',
+  };
+
+  // ── Messy parsing: delimiter detection + headerless, quote-aware matrix ───────
+  function mzCountOutsideQuotes(line, d) {
+    let n = 0, inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { if (inQ && line[i+1] === '"') { i++; } else inQ = !inQ; }
+      else if (ch === d && !inQ) n++;
+    }
+    return n;
+  }
+  function mzDetectDelim(raw) {
+    const lines = raw.split('\n').filter(l => l.trim() !== '').slice(0, 8);
+    let best = ',', bestScore = -1;
+    for (const d of [',', '\t', ';']) {
+      const counts = lines.map(l => mzCountOutsideQuotes(l, d));
+      const total = counts.reduce((a, b) => a + b, 0);
+      if (total > bestScore) { bestScore = total; best = d; }
+    }
+    return best;
+  }
+  // Parse ANY delimited text into a row matrix WITHOUT assuming a header.
+  // Strips a leading UTF-8 BOM, normalizes line endings, handles doubled ""
+  // quotes, pads short rows to the max column count, drops blank rows.
+  function parseMessyMatrix(text) {
+    let raw = String(text).replace(/^﻿/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const delim = mzDetectDelim(raw);
+    const rows = []; let row = [], cur = '', inQ = false;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (inQ) {
+        if (ch === '"') { if (raw[i+1] === '"') { cur += '"'; i++; } else inQ = false; }
+        else cur += ch;
+      } else {
+        if (ch === '"') inQ = true;
+        else if (ch === delim) { row.push(cur); cur = ''; }
+        else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+        else cur += ch;
+      }
+    }
+    if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+    const cleaned = rows.filter(r => r.some(c => String(c).trim() !== ''));
+    const maxCols = cleaned.reduce((m, r) => Math.max(m, r.length), 0);
+    return cleaned.map(r => {
+      const c = r.slice();
+      while (c.length < maxCols) c.push('');
+      return c.map(x => String(x).trim());
+    });
+  }
+
+  // ── Heuristics ───────────────────────────────────────────────────────────────
+  // Row 1 looks like labels if no cell is a $-amount/long number and all short.
+  function looksLikeHeader(row) {
+    if (!row || !row.length) return false;
+    for (const cell of row) {
+      const v = String(cell).trim();
+      if (v === '') continue;
+      if (v.length > 50) return false;
+      if (/^\$?\s*[\d,]+(\.\d+)?$/.test(v.replace(/\s/g, ''))) return false;
+    }
+    return true;
+  }
+  function mzIsMoney(v) {
+    const t = String(v).trim();
+    const hasCur = t.includes('$'), cents = /\.\d{2}$/.test(t);
+    if (!hasCur && !cents) return false;            // require $ or .## cents (so plain weights aren't "rate")
+    if (!/^\$?\s*-?[\d,]*\.?\d+$/.test(t)) return false;
+    const n = parseFloat(t.replace(/[$,\s]/g, ''));
+    return !isNaN(n) && n > 50;
+  }
+  function mzIsTrailer(v) {
+    return /\b(dry\s*van|reefer|refrigerated|flat\s*bed|flatbed|step\s*deck|stepdeck|rgn|power\s*only|conestoga|hot\s*shot|hotshot|sprinter|box\s*truck|straight\s*truck|tanker|lowboy|low\s*boy|drop\s*deck|dropdeck|van)\b/i.test(String(v));
+  }
+  function mzIsDate(v) {
+    return /^\d{1,4}[\/\-.]\d{1,2}([\/\-.]\d{1,4})?/.test(String(v).trim());
+  }
+  function mzIsCityState(v) {
+    const t = String(v).trim();
+    if (t.length > 42 || t.length < 4) return false;
+    return /^[A-Za-z][A-Za-z.'\- ]*[,\s]\s*[A-Za-z]{2}\.?$/.test(t);
+  }
+  function mzIsAddress(v) {
+    const t = String(v).trim();
+    return t.length > 22 && /\d/.test(t) && t.includes(',');
+  }
+  // Guess by header alias first (if header active), then by DATA SHAPE.
+  // May return the abstract 'cityst' / 'address' markers, resolved by caller.
+  function guessFieldForColumn(headerCell, samples) {
+    const h = String(headerCell || '').trim().toLowerCase();
+    if (h && HEADER_ALIAS[h]) return HEADER_ALIAS[h];
+    const ne = samples.map(v => String(v || '').trim()).filter(Boolean);
+    if (!ne.length) return 'ignore';
+    const frac = pred => ne.filter(pred).length / ne.length;
+    if (frac(mzIsMoney)     >= 0.6) return 'rate';
+    if (frac(mzIsTrailer)   >= 0.5) return 'trailer';
+    if (frac(mzIsDate)      >= 0.6) return 'puDate';
+    if (frac(mzIsCityState) >= 0.5) return 'cityst';
+    if (frac(mzIsAddress)   >= 0.5) return 'address';
+    return 'ignore';
+  }
+
+  // ── Messy state helpers ──────────────────────────────────────────────────────
+  function messyColCount() { return _messy.matrix.reduce((m, r) => Math.max(m, r.length), 0); }
+  function messyHeaderCells() {
+    if (!_messy.hasHeader) return null;
+    const idx = Math.min(Math.max(_messy.headerRow - 1, 0), _messy.matrix.length - 1);
+    return _messy.matrix[idx] || [];
+  }
+  function messyDataRows() {
+    return _messy.hasHeader ? _messy.matrix.slice(_messy.headerRow) : _messy.matrix.slice();
+  }
+  // (Re)compute the per-column field guesses. Resolves cityst -> Origin then
+  // Destination, address -> Pickup then Delivery, and de-dups concrete fields so
+  // the initial mapping is import-ready.
+  function messyRecomputeGuess() {
+    const cols = messyColCount();
+    const headerCells = messyHeaderCells();
+    const data = messyDataRows().slice(0, 25);
+    const raw = [];
+    for (let c = 0; c < cols; c++) {
+      const samples = data.map(r => (r[c] == null ? '' : r[c]));
+      raw.push(guessFieldForColumn(headerCells ? (headerCells[c] || '') : '', samples));
+    }
+    let cityN = 0, addrN = 0;
+    const mapping = raw.map(g => {
+      if (g === 'cityst')  { cityN++; return cityN === 1 ? 'origin' : cityN === 2 ? 'dest' : 'ignore'; }
+      if (g === 'address') { addrN++; return addrN === 1 ? 'pickup' : addrN === 2 ? 'delivery' : 'ignore'; }
+      return g;
+    });
+    const used = new Set();
+    for (let i = 0; i < mapping.length; i++) {
+      const k = mapping[i];
+      if (k === 'ignore') continue;
+      if (used.has(k)) mapping[i] = 'ignore'; else used.add(k);
+    }
+    _messy.mapping = mapping;
+  }
+  function messyValidate() {
+    const m = _messy.mapping || [];
+    const concrete = m.filter(k => k && k !== 'ignore');
+    const counts = {};
+    concrete.forEach(k => counts[k] = (counts[k] || 0) + 1);
+    const dups = Object.keys(counts).filter(k => counts[k] > 1);
+    const hasOrigin = concrete.includes('origin');
+    return { dups, hasOrigin, ok: hasOrigin && dups.length === 0 };
+  }
+  // Build canonical-header row objects from the mapped grid. Feeding these to the
+  // existing buildIndexesFromCSVRows applies the EXACT rate-clean, origin >=2-char
+  // drop, trailer resolution, and record shape (fact #2) — no reinvention.
+  function messyBuildRows() {
+    const data = messyDataRows();
+    const mapping = _messy.mapping || [];
+    const rows = [];
+    for (const r of data) {
+      const obj = {};
+      mapping.forEach((fieldKey, ci) => {
+        if (!fieldKey || fieldKey === 'ignore') return;
+        const header = FIELD_HEADER[fieldKey];
+        if (!header) return;
+        obj[header] = (r[ci] != null ? r[ci] : '');
+      });
+      rows.push(obj);
+    }
+    return rows;
+  }
+
+  async function openMessyFile(file, bodyEl) {
+    let text = '';
+    try { text = await file.text(); } catch (_) { return; }
+    const matrix = parseMessyMatrix(text);
+    const panel = bodyEl.querySelector('#dlm-messy-panel');
+    if (!matrix.length) {
+      _messy = null;
+      if (panel) panel.innerHTML = '<div style="font-size:11px;color:#ff3b30;font-weight:600">Could not read any rows from that file.</div>';
+      return;
+    }
+    _messy = { fileName: file.name || 'mapped.csv', matrix, hasHeader: looksLikeHeader(matrix[0]), headerRow: 1, mapping: [] };
+    messyRecomputeGuess();
+    renderMessyPanel(bodyEl);
+  }
+
+  function renderMessyPanel(bodyEl) {
+    const panel = bodyEl.querySelector('#dlm-messy-panel');
+    if (!panel) return;
+    if (!_messy) { panel.innerHTML = ''; return; }
+    const MZBTN = 'padding:7px 12px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap';
+    const cols = messyColCount();
+    const headerCells = messyHeaderCells();
+    const preview = messyDataRows().slice(0, 4);
+    const { dups, hasOrigin, ok } = messyValidate();
+    const dupSet = new Set(dups);
+
+    const optsFor = sel => MAP_FIELDS.map(f =>
+      `<option value="${f.key}" ${f.key === sel ? 'selected' : ''}>${esc(f.label)}</option>`).join('');
+
+    const colHTML = [];
+    for (let c = 0; c < cols; c++) {
+      const sel = _messy.mapping[c] || 'ignore';
+      const isDup = sel !== 'ignore' && dupSet.has(sel);
+      const headLabel = headerCells ? (String(headerCells[c] || '').trim() || `column ${c+1}`) : `column ${c+1}`;
+      const cells = preview.map(r => {
+        const raw = (r[c] != null ? r[c] : '');
+        const shown = esc(raw.slice(0, 40)) || '<span style="color:#c7c7cc">—</span>';
+        return `<div style="font-size:10px;color:#3a3a3a;padding:3px 0;border-top:1px solid rgba(0,0,0,.04);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(raw)}">${shown}</div>`;
+      }).join('');
+      colHTML.push(
+        `<div style="min-width:150px;flex:0 0 auto;border:1px solid ${isDup ? '#ff3b30' : '#e5e5ea'};border-radius:8px;padding:6px;background:${isDup ? '#fff5f5' : '#fff'}">
+           <select class="dlm-mz-select" data-col="${c}" style="width:100%;border:1px solid ${isDup ? '#ff3b30' : '#d1d1d6'};border-radius:6px;padding:5px;font-size:11px;font-family:inherit;font-weight:600;color:${isDup ? '#ff3b30' : '#0058e0'};background:#f9f9fb;margin-bottom:5px">${optsFor(sel)}</select>
+           <div style="font-size:9px;color:#aeaeb2;text-transform:uppercase;letter-spacing:.03em;margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(headLabel)}</div>
+           ${cells}
+         </div>`);
+    }
+
+    // Preserve scroll position across the full rebuild: innerHTML destroys the
+    // grid container, so capture from the OLD element (by id) before replacing.
+    const prevGrid = panel.querySelector('#dlm-mz-grid');
+    const prevScrollLeft = prevGrid ? prevGrid.scrollLeft : 0;
+    const prevScrollTop  = prevGrid ? prevGrid.scrollTop  : 0;
+
+    panel.innerHTML =
+      `<div style="background:#f9f9fb;border:1px solid #e5e5ea;border-radius:10px;padding:10px">
+         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+           <div style="font-size:11px;font-weight:700;color:#1d1d1f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px">🧹 ${esc(_messy.fileName)}</div>
+           <button id="dlm-mz-cancel" style="background:none;border:none;color:#8e8e93;font-size:12px;cursor:pointer;font-family:inherit">Cancel</button>
+         </div>
+         <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#1d1d1f;margin-bottom:6px;cursor:pointer">
+           <input id="dlm-mz-hashdr" type="checkbox" ${_messy.hasHeader ? 'checked' : ''}> First row has column names
+         </label>
+         <div style="display:${_messy.hasHeader ? 'flex' : 'none'};align-items:center;gap:6px;font-size:11px;color:#6e6e73;margin-bottom:8px">
+           Header is on row
+           <input id="dlm-mz-hdrrow" type="number" min="1" value="${_messy.headerRow}" style="width:54px;border:1px solid #d1d1d6;border-radius:6px;padding:3px 6px;font-size:11px;font-family:inherit">
+         </div>
+         <div style="font-size:10px;color:#aeaeb2;margin-bottom:6px">Set each column to a LaneIQ field by looking at the data ↓</div>
+         <div id="dlm-mz-grid" style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px">${colHTML.join('')}</div>
+         <div style="margin-top:8px">
+           ${!hasOrigin ? '<div style="font-size:11px;color:#ff3b30;font-weight:600;margin-bottom:6px">⚠ Map a column to <strong>Origin</strong> (required).</div>' : ''}
+           ${dups.length ? `<div style="font-size:11px;color:#ff3b30;font-weight:600;margin-bottom:6px">⚠ ${dups.length} field${dups.length > 1 ? 's are' : ' is'} mapped to more than one column (shown in red). Fix to import.</div>` : ''}
+           <button id="dlm-mz-import" ${ok ? '' : 'disabled'} style="${MZBTN};width:100%;${ok ? '' : 'opacity:.45;cursor:not-allowed'}">Clean &amp; Import</button>
+           <div id="dlm-mz-status" style="font-size:10px;color:#aeaeb2;margin-top:6px;text-align:center"></div>
+         </div>
+       </div>`;
+
+    // Reapply scroll synchronously now the new grid is in the DOM (its full
+    // scrollWidth exists immediately since the columns are already present).
+    const newGrid = panel.querySelector('#dlm-mz-grid');
+    if (newGrid) { newGrid.scrollLeft = prevScrollLeft; newGrid.scrollTop = prevScrollTop; }
+
+    const cancel = panel.querySelector('#dlm-mz-cancel');
+    if (cancel) cancel.addEventListener('click', () => { _messy = null; panel.innerHTML = ''; });
+    const hashdr = panel.querySelector('#dlm-mz-hashdr');
+    if (hashdr) hashdr.addEventListener('change', e => {
+      _messy.hasHeader = e.target.checked;
+      if (_messy.hasHeader && (!_messy.headerRow || _messy.headerRow < 1)) _messy.headerRow = 1;
+      messyRecomputeGuess();
+      renderMessyPanel(bodyEl);
+    });
+    const hdrrow = panel.querySelector('#dlm-mz-hdrrow');
+    if (hdrrow) hdrrow.addEventListener('change', e => {
+      let n = parseInt(e.target.value, 10);
+      if (isNaN(n) || n < 1) n = 1;
+      if (n > _messy.matrix.length) n = _messy.matrix.length;
+      _messy.headerRow = n;
+      messyRecomputeGuess();
+      renderMessyPanel(bodyEl);
+    });
+    panel.querySelectorAll('.dlm-mz-select').forEach(s => s.addEventListener('change', e => {
+      const c = parseInt(e.target.dataset.col, 10);
+      if (!isNaN(c)) _messy.mapping[c] = e.target.value;
+      renderMessyPanel(bodyEl);
+    }));
+    const imp = panel.querySelector('#dlm-mz-import');
+    if (imp) imp.addEventListener('click', () => messyImport(bodyEl));
+  }
+
+  // Import the mapped grid using the IDENTICAL append-merge as processSetupCSV
+  // (fact #3): read existing, assign _f at existingMeta.length, build via the
+  // existing buildIndexesFromCSVRows, mergeCSVIndexes (concat), early-return on
+  // count===0, write back combined meta + indexes + laneCount + version + loadedAt.
+  async function messyImport(bodyEl) {
+    if (!_messy) return;
+    if (!messyValidate().ok) return;
+    const rows = messyBuildRows();
+    const stored = await chrome.storage.local.get(['filesMeta', 'odIndex', 'oIndex', 'brokerIndex']);
+    const existingMeta = stored.filesMeta || [];
+    let existingOD  = stored.odIndex    || {};
+    let existingO   = stored.oIndex     || {};
+    let existingBrk = stored.brokerIndex || {};
+    const startIdx = existingMeta.length;
+    const { odIndex: nOD, oIndex: nO, brokerIndex: nB, count } = buildIndexesFromCSVRows(rows, startIdx);
+    if (count === 0) { // EARLY RETURN before any write — junk mapping never disturbs existing data
+      const st = bodyEl.querySelector('#dlm-mz-status');
+      if (st) { st.textContent = 'No rows imported — every row was missing a valid Origin (need ≥2 chars).'; st.style.color = '#ff3b30'; }
+      return;
+    }
+    existingOD  = mergeCSVIndexes(existingOD,  nOD);
+    existingO   = mergeCSVIndexes(existingO,   nO);
+    existingBrk = mergeCSVIndexes(existingBrk, nB);
+    const combinedMeta = existingMeta.concat([{ name: _messy.fileName, count }]);
+    const totalCount   = combinedMeta.reduce((s, f) => s + f.count, 0);
+    await chrome.storage.local.set({ filesMeta: combinedMeta, odIndex: existingOD, oIndex: existingO, brokerIndex: existingBrk, laneCount: totalCount, indexVersion: INDEX_VERSION, loadedAt: new Date().toISOString() });
+    filesMeta = combinedMeta;
+    _messy = null;
+    renderSetupBody(bodyEl);
   }
 
   function showLovedSearchResults(q) {
@@ -1728,6 +2088,38 @@ if (so && ro && so !== ro) return false;
     }
   }
 
+  // Transient (NEVER persisted): flips true only when the user header-drags the
+  // panel away from its default right-edge anchor. Resets to false each page load
+  // so the panel returns to right-anchored on reload. Width/height resizing does
+  // NOT set this — only repositioning via the header drag counts as "moved".
+  let panelUserMoved = false;
+
+  // Keep the floating panel inside the viewport. #dlm-panel is position:fixed and,
+  // once dragged, becomes left-anchored via inline style.left/top. Narrowing the
+  // window then leaves that fixed left beyond innerWidth, sliding the panel off
+  // screen and out of reach. This re-clamps left/top with an 8px margin so it can
+  // never sit off-screen. No-op while hidden or already fully on-screen, so the
+  // default right-anchored placement and normal drag behavior are untouched.
+  function clampPanelToViewport(panel) {
+    panel = panel || document.getElementById('dlm-panel');
+    if (!panel || panel.style.display === 'none') return;
+    const w = panel.offsetWidth, h = panel.offsetHeight;
+    if (!w || !h) return; // not laid out yet
+    const M = 8; // viewport margin
+    const r = panel.getBoundingClientRect();
+    const maxLeft = Math.max(M, window.innerWidth  - w - M);
+    const maxTop  = Math.max(M, window.innerHeight - h - M);
+    const newLeft = Math.min(maxLeft, Math.max(M, r.left));
+    const newTop  = Math.min(maxTop,  Math.max(M, r.top));
+    // Only reposition when actually out of bounds — preserves the right-anchored
+    // default (right:16px) while the panel is fully visible.
+    if (Math.abs(newLeft - r.left) > 0.5 || Math.abs(newTop - r.top) > 0.5) {
+      panel.style.left  = Math.round(newLeft) + 'px';
+      panel.style.top   = Math.round(newTop)  + 'px';
+      panel.style.right = 'auto';
+    }
+  }
+
   function buildPanel() {
     const d = document.createElement('div');
     d.id = 'dlm-panel';
@@ -1859,6 +2251,7 @@ if (so && ro && so !== ro) return false;
 
     document.addEventListener('mousemove', e => {
       if (isDragging) {
+        panelUserMoved = true; // a real header-drag — stop tracking the right edge
         d.style.left  = Math.max(0, Math.min(window.innerWidth  - d.offsetWidth,  e.clientX - dragOffX)) + 'px';
         d.style.top   = Math.max(0, Math.min(window.innerHeight - d.offsetHeight, e.clientY - dragOffY)) + 'px';
         d.style.right = 'auto';
@@ -1888,6 +2281,29 @@ if (so && ro && so !== ro) return false;
         d.classList.remove('dlm-resizing');
       }
     });
+
+    // Window-resize positioning (debounced). buildPanel runs once, so this listener
+    // is added once.
+    //  • Not user-dragged → keep RIGHT-ANCHORED: clear any inline left/right so CSS
+    //    right:16px governs. The panel then tracks the right edge natively in BOTH
+    //    directions (slides in when narrower, back out when wider). When the window
+    //    is narrower than the panel, the CSS right anchor keeps the right edge — and
+    //    thus the header/close button — on-screen, so no left-clamp is needed.
+    //  • User-dragged → clamp so a moved panel can never go off-screen, but is NOT
+    //    forced back to the right (it stays where the user left it).
+    function reflowPanel() {
+      if (!panelUserMoved) {
+        if (d.style.left || d.style.right === 'auto') { d.style.left = ''; d.style.right = ''; }
+      } else {
+        clampPanelToViewport(d);
+      }
+    }
+    let _clampTimer = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(_clampTimer);
+      _clampTimer = setTimeout(reflowPanel, 100);
+    });
+    requestAnimationFrame(reflowPanel);
 
     // Tab clicks
     d.querySelectorAll('.dlm-tab').forEach(btn =>

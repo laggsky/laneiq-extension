@@ -32,9 +32,9 @@
 ---
 
 ## Current Version
-- Manifest: 1.31
-- Chrome Store target: v1.31 (submitted, awaiting Published confirmation)
-- Last submitted to store: v1.25 (May 26 2026)
+- Manifest: 1.36
+- Chrome Store target: v1.36 (messy CSV mapper + panel viewport clamp/resize fixes)
+- Last submitted to store: v1.35 (June 7 2026 — packaged WITHOUT the messy CSV mapper; superseded by 1.36)
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
 A stale v1.29 once shipped because code landed but the manifest was never

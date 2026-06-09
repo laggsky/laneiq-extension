@@ -2,25 +2,52 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Welcome to LaneIQ</title>
+<!-- No CDN fonts — system-font fallbacks used. Gabarito/Hanken names kept so
+     any user who has them installed locally gets them automatically. -->
 <style>
+  /* ════════════════════════════════════════════════════════════════════
+     DESIGN TOKENS — mirrors the LaneIQ marketing site identity
+     ════════════════════════════════════════════════════════════════════ */
   :root {
-    --orange: #ff6b2b;
-    --orange-dark: #e85a1f;
-    --orange-soft: #fff4ee;
-    --orange-shadow: rgba(255, 107, 43, .35);
-    --ink: #1d1d1f;
-    --ink-soft: #6e6e73;
-    --ink-faint: #aeaeb2;
-    --line: #e5e5ea;
-    --bg: #fafafa;
+    --bg:         #ffffff;
+    --panel:      #ffffff;
+    --ink:        #0a1018;
+    --dim:        #3a4150;
+    --dimmer:     #5b6472;
+    --faint:      rgba(10,16,24,0.16);
+    --hair:       rgba(10,16,24,0.10);
+
+    --blue:       #2563eb;
+    --blue-ink:   #1d4ed8;
+    --blue-soft:  rgba(37,99,235,0.10);
+    --blue-tint:  #e7effe;
+
+    --accent:     #c2912f;
+    --accent-ink: #a5772a;
+    --accent-soft:rgba(194,145,47,0.16);
+
+    --green:      #2f8f57;
+    --green-soft: #e4f1e8;
+    --amber:      #d98a1f;
+    --amber-soft: #f7ecd7;
+    --grey-soft:  #e6ecf5;
+
+    --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+    --radius: 22px;
+    --shadow-sm: 0 1px 2px rgba(20,40,80,0.07), 0 4px 14px rgba(20,40,80,0.06);
+    --shadow-md: 0 12px 30px rgba(20,40,80,0.11), 0 4px 12px rgba(20,40,80,0.07);
+    --shadow-lg: 0 30px 70px rgba(20,40,80,0.16), 0 10px 24px rgba(20,40,80,0.10);
   }
-  * { box-sizing: border-box; }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
-    margin: 0; padding: 0;
     background: var(--bg);
     color: var(--ink);
-    font-family: -apple-system, "SF Pro Text", BlinkMacSystemFont, system-ui, sans-serif;
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 400;
+    line-height: 1.6;
     -webkit-font-smoothing: antialiased;
     height: 100vh;
     overflow: hidden;
@@ -29,7 +56,7 @@
   /* ─── Slide deck ──────────────────────────────────────────────────── */
   .deck {
     display: flex;
-    width: 600vw;
+    width: 700vw;
     height: 100vh;
     transform: translateX(0);
     transition: transform .55s cubic-bezier(.22, 1, .36, 1);
@@ -39,939 +66,593 @@
   .deck.show-4 { transform: translateX(-300vw); }
   .deck.show-5 { transform: translateX(-400vw); }
   .deck.show-6 { transform: translateX(-500vw); }
+  .deck.show-7 { transform: translateX(-600vw); }
 
   .screen {
     width: 100vw;
     height: 100vh;
     flex-shrink: 0;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 32px;
+    padding: 40px 32px 56px;
     overflow-y: auto;
     position: relative;
   }
   .screen .inner {
-    opacity: 0;
-    transform: translateY(10px);
-    transition: opacity .5s ease .15s, transform .5s ease .15s;
     width: 100%;
+    margin-block: auto;
+    position: relative;
+    z-index: 1;
   }
-  .screen.active .inner {
-    opacity: 1;
-    transform: translateY(0);
+  @media (prefers-reduced-motion: no-preference) {
+    .screen .inner {
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity .55s ease .12s, transform .55s ease .12s;
+    }
+    .screen.active .inner { opacity: 1; transform: translateY(0); }
   }
 
-  /* Subtle back link in the top-left of screens 2–6 */
+  /* Back link */
   .back-link {
     position: absolute;
-    top: 22px;
-    left: 24px;
-    background: none;
-    border: none;
-    font-family: inherit;
-    font-size: 13px;
-    color: var(--ink-soft);
-    cursor: pointer;
-    padding: 6px 8px;
-    border-radius: 6px;
+    top: 26px; left: 28px;
+    background: none; border: none;
+    font-family: inherit; font-size: 14px; font-weight: 500;
+    color: var(--dimmer); cursor: pointer;
+    padding: 6px 10px; border-radius: 9px;
     transition: color .15s, background .15s;
     z-index: 5;
   }
-  .back-link:hover {
-    color: var(--ink);
-    background: rgba(0, 0, 0, .04);
-  }
+  .back-link:hover { color: var(--ink); background: var(--accent-soft); }
 
-  /* ─── Shared brand bar ────────────────────────────────────────────── */
-  .brand-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 28px;
-  }
+  /* ─── Brand lockup ────────────────────────────────────────────────── */
+  .brand-row { display: flex; align-items: center; gap: 11px; margin-bottom: 30px; }
   .brand-mark-sm {
-    width: 32px; height: 32px;
-    border-radius: 8px;
-    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-dark) 100%);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-weight: 800;
-    font-size: 15px;
-    box-shadow: 0 4px 10px rgba(255, 107, 43, .28);
+    width: 30px; height: 30px; border-radius: 8px;
+    background: #1b1b1d;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--amber);
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 800; font-size: 13px; letter-spacing: -.02em;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
   }
   .brand-name-sm {
-    font-weight: 700;
-    font-size: 16px;
-    letter-spacing: -.01em;
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 600; font-size: 17px; letter-spacing: -.03em; color: var(--ink);
   }
 
-  /* ─── Screen 1 — Welcome ──────────────────────────────────────────── */
-  #screen1 .inner { max-width: 540px; text-align: center; }
-  .logo-mark {
-    width: 88px; height: 88px;
-    margin: 0 auto 28px;
-    border-radius: 22px;
-    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-dark) 100%);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: #fff;
-    font-weight: 800;
-    font-size: 44px;
-    letter-spacing: -.04em;
-    box-shadow: 0 18px 36px rgba(255, 107, 43, .35), 0 4px 10px rgba(0, 0, 0, .08);
-    position: relative;
+  /* ─── Shared headings ─────────────────────────────────────────────── */
+  h1.hero {
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: clamp(40px, 5.4vw, 60px);
+    line-height: 1.04; font-weight: 800; letter-spacing: -.03em; margin: 0 0 18px;
   }
-  .logo-mark::before {
-    content: '';
-    position: absolute;
-    inset: 4px;
-    border-radius: 18px;
-    background: linear-gradient(135deg, rgba(255,255,255,.18) 0%, rgba(255,255,255,0) 50%);
-    pointer-events: none;
+  h1.hero .accent { color: var(--accent); }
+
+  h2.title {
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: clamp(30px, 4vw, 40px);
+    line-height: 1.1; font-weight: 700; letter-spacing: -.025em; margin: 0 0 10px;
+  }
+  h2.title .accent { color: var(--accent); }
+
+  .sub {
+    font-size: 17px; color: var(--dim); line-height: 1.55;
+    margin: 0 0 34px; max-width: 600px;
+  }
+  .sub b { color: var(--ink); font-weight: 600; }
+
+  /* ════════════════════════════════════════════════════════════════════
+     SCREEN 1 — WELCOME (dusk-glow hero)
+     ════════════════════════════════════════════════════════════════════ */
+  #screen1 { overflow: hidden; }
+  #screen1 .inner { max-width: 560px; text-align: center; }
+
+  .hero-aurora { position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  .hero-grid-floor {
+    position: absolute; left: 50%; bottom: -2%;
+    width: 230%; height: 70%;
+    transform: translateX(-50%) perspective(620px) rotateX(74deg);
+    transform-origin: bottom center;
+    background-image:
+      linear-gradient(rgba(90,110,140,.13) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(90,110,140,.13) 1px, transparent 1px);
+    background-size: 46px 46px;
+    -webkit-mask-image: linear-gradient(to top, #000 4%, rgba(0,0,0,.28) 40%, transparent 76%);
+    mask-image: linear-gradient(to top, #000 4%, rgba(0,0,0,.28) 40%, transparent 76%);
+  }
+  .glow-amber {
+    position: absolute; left: 78%; top: 26%;
+    width: 44vw; height: 40vw; transform: translate(-50%,-50%);
+    background: radial-gradient(circle at 50% 50%, rgba(240,170,70,.34), rgba(240,170,70,0) 60%);
+    filter: blur(8px);
+  }
+  .glow-steel {
+    position: absolute; left: 20%; top: 16%;
+    width: 40vw; height: 36vw;
+    background: radial-gradient(circle at 50% 50%, rgba(95,130,240,.26), rgba(95,130,240,0) 62%);
+    filter: blur(8px);
+  }
+  .logo-mark {
+    width: 84px; height: 84px; margin: 0 auto 22px; border-radius: 22px;
+    background: #1b1b1d;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--amber);
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 800; font-size: 38px; letter-spacing: -.04em;
+    box-shadow: 0 20px 44px rgba(10,16,24,.28), inset 0 0 0 1px rgba(255,255,255,.07);
   }
   .wordmark {
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: -.02em;
-    margin-bottom: 48px;
-  }
-  h1.hero {
-    font-size: 46px;
-    line-height: 1.06;
-    font-weight: 700;
-    letter-spacing: -.025em;
-    margin: 0 0 18px;
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 21px; font-weight: 600; letter-spacing: -.03em;
+    margin-bottom: 36px; color: var(--ink);
   }
   .subtext {
-    font-size: 18px;
-    line-height: 1.5;
-    color: var(--ink-soft);
-    margin: 0 auto 44px;
-    max-width: 470px;
+    font-size: 19px; line-height: 1.5; color: var(--dim);
+    margin: 0 auto 40px; max-width: 480px;
   }
-  .subtext .em { color: var(--ink); font-weight: 600; }
+  .subtext b { color: var(--ink); font-weight: 600; }
 
-  /* ─── Shared title + sub ──────────────────────────────────────────── */
-  h2.title {
-    font-size: 32px;
-    line-height: 1.12;
-    font-weight: 700;
-    letter-spacing: -.02em;
-    margin: 0 0 8px;
+  /* ════════════════════════════════════════════════════════════════════
+     SCREEN 2 — LOAD HISTORY (product panel recreation)
+     ════════════════════════════════════════════════════════════════════ */
+  #screen2 .inner { max-width: 660px; }
+  .lh-panel {
+    --p-ink: #16202c; --p-dim: #5b6472; --p-faint: #98a1ae;
+    --p-hair: rgba(22,32,44,0.10); --p-fill: #f3f5f8; --p-blue: #2563eb;
+    background: #fff; border: 1px solid var(--hair); border-radius: 14px;
+    box-shadow: var(--shadow-lg); margin: 4px 0 14px; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   }
-  h2.title .accent { color: var(--orange); }
-  .sub {
-    font-size: 15px;
-    color: var(--ink-soft);
-    line-height: 1.5;
-    margin: 0 0 32px;
-    max-width: 580px;
-  }
+  .lh-winbar { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--p-hair); }
+  .lh-wintitle { font-size: 14px; font-weight: 700; color: var(--p-ink); display: inline-flex; align-items: center; gap: 8px; }
+  .lh-wintitle .lh-hint { font-size: 11px; font-weight: 500; color: var(--p-faint); }
+  .lh-winbtns { display: inline-flex; gap: 8px; }
+  .lh-winbtns .wb { width: 22px; height: 22px; border-radius: 50%; background: var(--p-fill); color: var(--p-dim); font-size: 12px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+  .lh-search { display: flex; align-items: center; gap: 9px; padding: 9px 14px; border-bottom: 1px solid var(--p-hair); }
+  .lh-search .mag { width: 13px; height: 13px; border: 1.6px solid var(--p-faint); border-radius: 50%; position: relative; flex-shrink: 0; }
+  .lh-search .mag::after { content: ''; position: absolute; right: -4px; bottom: -3px; width: 5px; height: 1.6px; background: var(--p-faint); transform: rotate(45deg); }
+  .lh-search .ph { font-size: 12.5px; color: var(--p-faint); }
+  .lh-main { display: grid; grid-template-columns: 94px 1fr; }
+  .lh-rail { background: #eef1f5; border-right: 1px solid var(--p-hair); padding: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+  .lh-tab { font-size: 11.5px; font-weight: 500; color: var(--p-dim); padding: 9px 13px; border-left: 2px solid transparent; }
+  .lh-tab.on { color: var(--p-blue); background: #fff; border-left-color: var(--p-blue); font-weight: 700; }
+  .lh-body { padding: 13px 15px; display: flex; flex-direction: column; gap: 11px; min-width: 0; }
+  .lh-seclbl { font-size: 9.5px; font-weight: 700; letter-spacing: .12em; color: var(--p-faint); text-transform: uppercase; }
+  .lh-field { display: grid; grid-template-columns: 80px 1fr; align-items: center; gap: 10px; }
+  .lh-field .k { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; color: var(--p-faint); text-transform: uppercase; line-height: 1.2; }
+  .lh-field .box { background: var(--p-fill); border: 1px solid var(--p-hair); border-radius: 7px; padding: 7px 10px; font-size: 12.5px; font-weight: 600; color: var(--p-ink); }
+  .lh-field.slider { grid-template-columns: 80px 1fr auto; }
+  .lh-slider { position: relative; height: 4px; border-radius: 3px; background: #d7deea; }
+  .lh-slider::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--p,50%); background: var(--p-blue); border-radius: 3px; }
+  .lh-slider::after { content: ''; position: absolute; left: var(--p,50%); top: 50%; width: 13px; height: 13px; border-radius: 50%; background: var(--p-blue); border: 2px solid #fff; transform: translate(-50%,-50%); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+  .lh-slider-val { font-size: 12px; font-weight: 700; color: var(--p-blue); font-family: var(--mono); white-space: nowrap; }
+  .lh-route { font-size: 14px; font-weight: 700; color: var(--p-ink); display: flex; align-items: center; gap: 7px; margin-top: 3px; }
+  .lh-route .arr { color: var(--amber); }
+  .lh-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+  .lh-stat { border-radius: 10px; padding: 10px 13px; border: 1px solid var(--p-hair); }
+  .lh-stat.avg { background: #faf1de; border-color: #f0dcb4; }
+  .lh-stat.best { background: #e6f3ea; border-color: #c3e3cd; }
+  .lh-stat .sk { font-size: 9.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--p-faint); }
+  .lh-stat .sv { font-size: 20px; font-weight: 800; color: var(--p-ink); font-family: var(--mono); letter-spacing: -.02em; margin-top: 2px; }
+  .lh-stat.best .sv { color: #1f8a4d; }
+  .lh-count { font-size: 11.5px; color: var(--p-dim); }
+  .lh-cards { display: flex; flex-direction: column; gap: 9px; }
+  .lh-card { border: 1px solid var(--p-hair); border-left: 3px solid var(--amber); border-radius: 10px; padding: 11px 13px; box-shadow: var(--shadow-sm); display: flex; flex-direction: column; gap: 6px; }
+  .lh-card-top { display: flex; align-items: center; }
+  .lh-card .id { font-family: var(--mono); font-size: 11px; color: var(--p-dim); background: var(--grey-soft); border-radius: 5px; padding: 2px 7px; }
+  .lh-card .heart { margin-left: auto; color: var(--p-faint); font-size: 14px; }
+  .lh-card .co { font-size: 12.5px; font-weight: 700; color: var(--p-ink); letter-spacing: -.01em; }
+  .lh-card .eq { align-self: flex-start; font-size: 10px; font-weight: 600; color: var(--p-dim); background: var(--grey-soft); border-radius: 5px; padding: 2px 7px; }
+  .lh-card .cgrid { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; align-items: baseline; margin-top: 1px; }
+  .lh-card .ck { font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--p-faint); }
+  .lh-card .cv { font-size: 12px; color: var(--p-dim); }
+  .lh-card .cv.rate { font-family: var(--mono); font-weight: 800; color: var(--p-ink); font-size: 14px; }
+  .panel-caption { text-align: center; font-size: 13px; color: var(--dimmer); margin-bottom: 24px; line-height: 1.5; }
 
-  /* ─── Setup-style step card (used on screens 2, 3, 4) ─────────────── */
-  .setup-card {
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 12px 28px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, .05), 0 2px 6px rgba(0, 0, 0, .04);
-    margin-bottom: 28px;
-  }
-  .setup-step {
-    display: flex;
-    gap: 16px;
-    padding: 20px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .setup-step:last-child { border-bottom: none; }
-  .setup-num {
-    flex-shrink: 0;
-    width: 36px; height: 36px;
-    border-radius: 10px;
-    background: var(--orange-soft);
-    color: var(--orange);
-    font-weight: 700;
-    font-size: 16px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .setup-body { flex: 1; padding-top: 4px; }
-  .setup-title {
-    font-weight: 600;
-    font-size: 15px;
-    line-height: 1.5;
-    color: var(--ink);
-  }
-  .setup-title .chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 7px;
-    border-radius: 5px;
-    background: var(--orange-soft);
-    color: var(--orange);
-    font-weight: 600;
-    font-size: 13px;
-    margin: 0 1px;
-  }
-  .setup-title .link {
-    color: var(--orange);
-    font-weight: 600;
-    text-decoration: none;
-  }
-  .setup-title .link:hover { text-decoration: underline; }
-  .optional-tag {
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--ink-soft);
-    background: #f1f1f4;
-    padding: 2px 7px;
-    border-radius: 5px;
-    margin-left: 6px;
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    vertical-align: middle;
-  }
+  /* ════════════════════════════════════════════════════════════════════
+     SCREEN 3 — EMAIL TEMPLATE
+     ════════════════════════════════════════════════════════════════════ */
+  #screen3 .inner { max-width: 720px; }
 
-  /* Soft gray tip note (Email screen) */
-  .tip-note {
-    padding: 12px 14px;
-    background: rgba(0, 0, 0, .03);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    font-size: 13px;
-    color: var(--ink-soft);
-    line-height: 1.55;
-    margin-bottom: 28px;
+  .tpl-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px; margin-bottom: 24px;
   }
-  .tip-note strong { color: var(--ink); font-weight: 600; }
+  .tpl-card {
+    position: relative; text-align: left;
+    background: var(--panel); border: 1px solid var(--hair);
+    border-radius: 14px; padding: 16px;
+    box-shadow: var(--shadow-sm); cursor: pointer; font-family: inherit;
+    display: flex; flex-direction: column; gap: 9px;
+    transition: border-color .15s, box-shadow .15s, transform .15s;
+  }
+  .tpl-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .tpl-card.active {
+    border: 2px solid var(--accent);
+    background: linear-gradient(180deg, #fdfaf3 0%, #fff 60%);
+    padding: 15px;
+  }
+  .tpl-active-badge {
+    position: absolute; top: -10px; left: 14px;
+    background: var(--accent); color: #fff;
+    font-size: 10px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 100px;
+    box-shadow: 0 4px 10px rgba(194,145,47,.3);
+  }
+  .tpl-card:not(.active) .tpl-active-badge { display: none; }
+  .tpl-top { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+  .tpl-name {
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 700; font-size: 15px; color: var(--ink); line-height: 1.15;
+  }
+  .tpl-tag {
+    font-size: 10px; font-weight: 600; color: var(--dimmer);
+    background: var(--grey-soft); border-radius: 100px;
+    padding: 2px 8px; white-space: nowrap; text-transform: uppercase; letter-spacing: .03em;
+  }
+  .tpl-card.active .tpl-tag { color: var(--accent-ink); background: var(--accent-soft); }
+  .tpl-preview { font-size: 12.5px; color: var(--dim); line-height: 1.5; margin: 0; }
+  .tpl-preview .v { font-family: var(--mono); font-size: 11.5px; color: var(--accent-ink); }
 
-  /* Gmail compose mockup (Email screen) */
   .gmail-compose {
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow: hidden;
-    box-shadow: 0 14px 36px rgba(0, 0, 0, .10), 0 2px 6px rgba(0, 0, 0, .06);
+    background: var(--panel); border: 1px solid var(--hair);
+    border-radius: 14px; overflow: hidden; box-shadow: var(--shadow-md);
     margin: 4px 0 18px;
   }
   .gmail-header {
-    background: #404040;
-    color: #fff;
-    padding: 9px 14px;
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: .005em;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+    background: #1f2937; color: #fff; padding: 10px 15px;
+    font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; justify-content: space-between;
   }
-  .gmail-header-actions {
-    display: inline-flex;
-    gap: 14px;
-    font-size: 13px;
-    color: #cfcfcf;
-    font-weight: 400;
-  }
+  .gmail-header .gmail-title { white-space: nowrap; }
+  .gmail-header-actions { display: inline-flex; gap: 14px; font-size: 13px; color: #cbd5e1; flex-shrink: 0; }
   .gmail-field {
-    display: flex;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--line);
-    font-size: 13.5px;
-    line-height: 1.5;
-    color: var(--ink);
-    align-items: baseline;
-    gap: 10px;
+    display: flex; padding: 11px 17px; border-bottom: 1px solid var(--hair);
+    font-size: 13.5px; line-height: 1.5; color: var(--ink);
+    align-items: baseline; gap: 10px;
   }
-  .gmail-label {
-    color: var(--ink-soft);
-    font-weight: 500;
-    flex-shrink: 0;
-    min-width: 60px;
-  }
+  .gmail-label { color: var(--dimmer); font-weight: 500; flex-shrink: 0; min-width: 62px; }
   .gmail-value { flex: 1; word-break: break-word; }
   .gmail-body {
-    padding: 18px 16px 22px;
-    font-size: 13.5px;
-    color: var(--ink);
-    line-height: 1.7;
-    white-space: pre-wrap;
+    padding: 18px 17px 22px; font-size: 13.5px; color: var(--ink);
+    line-height: 1.7; white-space: pre-wrap;
   }
-  .gmail-compose .hl {
-    color: #ff6b2b;
-    font-weight: 700;
-  }
+  .gmail-compose .hl { color: var(--accent-ink); font-weight: 600; font-family: var(--mono); font-size: 12.5px; }
 
-  /* Two-row legend below mockup */
-  .field-legend {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 18px;
-    font-size: 13px;
-    line-height: 1.5;
+  .tip-note {
+    padding: 14px 16px; background: #f6f8fb; border: 1px solid var(--hair);
+    border-radius: 12px; font-size: 13.5px; color: var(--dim);
+    line-height: 1.55; margin-bottom: 30px;
   }
-  .field-legend .row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--ink-soft);
-    flex-wrap: wrap;
-  }
-  .field-legend .row strong {
-    color: var(--ink);
-    font-weight: 600;
-  }
-  .field-legend .row .vars {
-    color: #ff6b2b;
-    font-weight: 600;
-  }
+  .tip-note b { color: var(--ink); font-weight: 600; }
 
-  /* RPM Calculator mockup (Maps screen) */
-  .rpm-mockup {
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, .10), 0 2px 6px rgba(0, 0, 0, .05);
-    margin: 4px 0 12px;
-    overflow: hidden;
-    display: grid;
-    grid-template-columns: 1.1fr 1fr;
-  }
-  .rpm-map-side {
-    padding: 18px 20px;
-    border-right: 1px solid var(--line);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-  }
-  .rpm-map-svg {
-    width: 100%;
-    height: auto;
-    display: block;
-    margin-bottom: 12px;
-  }
-  .rpm-map-stats {
-    font-size: 11.5px;
-    color: var(--ink-soft);
-    text-align: center;
-    line-height: 1.55;
-  }
-  .rpm-calc {
-    padding: 18px 22px;
-  }
-  .rpm-calc-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: .14em;
-    color: var(--ink-faint);
-    text-transform: uppercase;
-    margin-bottom: 10px;
-  }
-  .rpm-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 7px 0;
-    border-bottom: 1px solid rgba(0, 0, 0, .04);
-  }
-  .rpm-row:last-child { border-bottom: none; }
-  .rpm-row .k {
-    color: var(--ink-soft);
-    font-size: 10.5px;
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    font-weight: 500;
-  }
-  .rpm-row .v {
-    color: var(--ink);
-    font-weight: 600;
-    font-size: 13px;
-  }
-  .rpm-row .v.hi-orange {
-    color: var(--orange);
-    font-weight: 800;
-    font-size: 14.5px;
-  }
-  .rpm-row .v.hi-green {
-    color: #16a34a;
-    font-weight: 800;
-    font-size: 14.5px;
-  }
-  .rpm-caption {
-    text-align: center;
-    font-size: 12.5px;
-    color: var(--ink-soft);
-    font-style: italic;
-    margin-bottom: 28px;
-    line-height: 1.5;
-  }
+  /* ════════════════════════════════════════════════════════════════════
+     SCREEN 4 — MAPS & RPM (built-in, zero setup)
+     ════════════════════════════════════════════════════════════════════ */
+  #screen4 .inner { max-width: 720px; }
 
-  /* Orange warm note (Maps screen) */
-  .warm-note {
-    padding: 14px 16px;
-    background: var(--orange-soft);
-    border: 1px solid #ffd4bf;
-    border-radius: 10px;
-    font-size: 13.5px;
-    color: var(--ink);
-    line-height: 1.55;
+  .rpm-panel {
+    --p-ink: #16202c; --p-dim: #5b6472; --p-faint: #98a1ae;
+    --p-hair: rgba(22,32,44,0.10); --p-fill: #f3f5f8; --p-row: #eef2f7; --p-blue: #2563eb;
+    background: #fff; border: 1px solid var(--hair); border-radius: 14px;
+    box-shadow: var(--shadow-lg); margin: 4px 0 14px; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+  .rpm-winbar { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; border-bottom: 1px solid var(--p-hair); }
+  .rpm-wintitle { font-size: 14px; font-weight: 700; color: var(--p-ink); letter-spacing: -.01em; display: inline-flex; align-items: center; gap: 7px; }
+  .rpm-wintitle .arr { color: var(--p-faint); font-weight: 500; }
+  .rpm-winbtns { display: inline-flex; gap: 8px; }
+  .rpm-winbtns .wb { width: 22px; height: 22px; border-radius: 50%; background: var(--p-fill); color: var(--p-dim); font-size: 12px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+  .rpm-tabs { display: flex; gap: 4px; background: #eef1f5; padding: 6px 8px 0; border-bottom: 1px solid var(--p-hair); }
+  .rpm-tab { font-size: 11.5px; color: var(--p-dim); background: transparent; padding: 7px 11px; border-radius: 8px 8px 0 0; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 48%; }
+  .rpm-tab .x { color: var(--p-faint); font-size: 11px; flex-shrink: 0; }
+  .rpm-tab.active { background: #fff; color: var(--p-ink); font-weight: 600; }
+  .rpm-body { display: grid; grid-template-columns: 1.35fr 1fr; }
+  .rpm-map { position: relative; border-right: 1px solid var(--p-hair); min-height: 320px; overflow: hidden; background: #aacbe8; }
+  .rpm-map svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .rpm-gmark { position: absolute; left: 9px; bottom: 36px; font-size: 13px; font-weight: 700; color: #5f6368; letter-spacing: -.02em; }
+  .rpm-attr { position: absolute; right: 7px; bottom: 31px; font-size: 8px; color: #6b7280; background: rgba(255,255,255,.6); padding: 1px 4px; border-radius: 3px; }
+  .rpm-map-foot { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,.94); border-top: 1px solid var(--p-hair); padding: 7px 11px; font-size: 10px; color: var(--p-dim); font-family: var(--mono); display: flex; gap: 8px; align-items: center; white-space: nowrap; overflow: hidden; }
+  .rpm-map-foot span { white-space: nowrap; }
+  .rpm-map-foot b { color: var(--p-ink); font-weight: 700; }
+  .rpm-map-foot .sep { color: var(--p-faint); }
+  .rpm-calc { padding: 12px 14px; display: flex; flex-direction: column; gap: 7px; }
+  .rpm-calc-label { font-size: 9.5px; font-weight: 700; letter-spacing: .14em; color: var(--p-faint); text-transform: uppercase; margin-bottom: 2px; }
+  .rpm-field { display: grid; grid-template-columns: 76px 1fr; align-items: center; gap: 10px; }
+  .rpm-field .k { font-size: 12px; color: var(--p-dim); white-space: nowrap; }
+  .rpm-field .inp { display: flex; align-items: center; gap: 4px; background: var(--p-fill); border: 1px solid var(--p-hair); border-radius: 7px; padding: 6px 9px; min-width: 0; }
+  .rpm-field .inp.focus { background: #eaf1ff; border-color: rgba(37,99,235,.45); box-shadow: 0 0 0 2px rgba(37,99,235,.10); }
+  .rpm-field .inp .pre { color: var(--p-faint); font-size: 11.5px; }
+  .rpm-field .inp .val { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--p-ink); font-family: var(--mono); white-space: nowrap; }
+  .rpm-field .inp .suf { color: var(--p-faint); font-size: 11px; }
+  .rpm-calc-row { display: flex; align-items: center; justify-content: space-between; background: var(--p-row); border-radius: 7px; padding: 8px 10px; }
+  .rpm-calc-row .k { font-size: 12px; color: var(--p-dim); }
+  .rpm-calc-row .v { font-size: 13px; font-weight: 700; color: var(--p-ink); font-family: var(--mono); }
+  .rpm-calc-row .v.accent { color: var(--p-blue); }
+  .rpm-calc-row .v.green { color: #1f9d57; font-size: 14.5px; }
+  .rpm-div { height: 1px; background: var(--p-hair); margin: 3px 1px; }
+  .rpm-caption { text-align: center; font-size: 13px; color: var(--dimmer); margin-bottom: 24px; line-height: 1.5; }
+
+  /* "zero setup" badge for Maps screen */
+  .built-in-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--green-soft); border: 1px solid rgba(47,143,87,.22);
+    border-radius: 100px; padding: 7px 14px;
+    font-size: 13px; font-weight: 600; color: var(--green);
     margin-bottom: 28px;
   }
-  .warm-note strong { color: var(--orange-dark); font-weight: 700; }
 
-  /* ─── Screen 2 — Setup ────────────────────────────────────────────── */
-  #screen2 .inner { max-width: 760px; }
+  /* ════════════════════════════════════════════════════════════════════
+     SCREEN 5 — DATA SETUP (CSV upload)
+     ════════════════════════════════════════════════════════════════════ */
+  #screen5 .inner { max-width: 780px; }
 
-  /* Display heading + aliases table (matches website #data section) */
-  h2.title-display {
-    font-size: clamp(28px, 4.2vw, 44px);
-    line-height: 1.08;
-    font-weight: 700;
-    letter-spacing: -.025em;
-    margin: 0 0 12px;
-    background: linear-gradient(180deg, var(--ink) 55%, rgba(29,29,31,.45));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-  .sub-display {
-    font-size: 16px;
-    color: var(--ink-soft);
-    line-height: 1.55;
-    margin: 0 0 32px;
-    max-width: 620px;
-    font-weight: 400;
-  }
   .col-table-wrap {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    margin-bottom: 24px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow: hidden;
-    background: #fff;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, .05), 0 1px 3px rgba(0, 0, 0, .03);
+    margin-bottom: 24px; border: 1px solid var(--hair);
+    border-radius: 16px; overflow: hidden;
+    background: var(--panel); box-shadow: var(--shadow-sm);
   }
   .col-table { width: 100%; border-collapse: collapse; }
-  .col-table thead tr {
-    border-bottom: 1px solid var(--line);
-    background: #fafafa;
-  }
+  .col-table thead tr { border-bottom: 1px solid var(--hair); background: #f6f8fb; }
   .col-table th {
-    padding: 10px 16px;
-    text-align: left;
-    font-size: 10.5px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .07em;
-    color: var(--ink-soft);
-    white-space: nowrap;
+    padding: 12px 18px; text-align: left;
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .07em; color: var(--dimmer); white-space: nowrap;
   }
   .col-table td {
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--line);
-    vertical-align: middle;
-    background: #fff;
-    font-size: 13px;
+    padding: 13px 18px; border-bottom: 1px solid var(--hair);
+    vertical-align: middle; background: var(--panel); font-size: 13.5px;
   }
   .col-table tbody tr:last-child td { border-bottom: none; }
-  .col-table tbody tr:hover td { background: #fafafa; }
-  .col-name {
-    font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
-    font-size: 13px;
-    color: var(--ink);
-    font-weight: 600;
-  }
-  .col-note {
-    font-size: 12px;
-    color: var(--ink-soft);
-    font-style: italic;
-    margin-top: 3px;
-    display: inline-block;
-    font-family: inherit;
-  }
+  .col-table tbody tr:hover td { background: #fafbfd; }
+  .col-name { font-family: var(--mono); font-size: 12.5px; color: var(--ink); font-weight: 500; }
+  .col-note { font-size: 12.5px; color: var(--dimmer); margin-top: 4px; display: inline-block; }
   .badge-req {
-    display: inline-flex;
-    background: var(--orange-soft);
-    border: 1px solid #ffd4bf;
-    color: var(--orange-dark);
-    border-radius: 980px;
-    padding: 3px 11px;
-    font-size: 10.5px;
-    font-weight: 700;
-    white-space: nowrap;
-    letter-spacing: .02em;
+    display: inline-flex; background: var(--accent-soft);
+    border: 1px solid rgba(194,145,47,.3); color: var(--accent-ink);
+    border-radius: 980px; padding: 3px 11px;
+    font-size: 10.5px; font-weight: 700; white-space: nowrap; letter-spacing: .02em;
   }
   .badge-opt {
-    display: inline-flex;
-    background: transparent;
-    border: 1px solid var(--line);
-    color: var(--ink-faint);
-    border-radius: 980px;
-    padding: 3px 11px;
-    font-size: 10.5px;
-    font-weight: 600;
-    white-space: nowrap;
-    letter-spacing: .02em;
+    display: inline-flex; background: transparent;
+    border: 1px solid var(--faint); color: var(--dimmer);
+    border-radius: 980px; padding: 3px 11px;
+    font-size: 10.5px; font-weight: 600; white-space: nowrap; letter-spacing: .02em;
   }
-  .col-aliases {
-    font-size: 12.5px;
-    color: var(--ink-soft);
-    font-family: 'SF Mono', 'Fira Code', ui-monospace, monospace;
-  }
+  .col-aliases { font-size: 12.5px; color: var(--dimmer); font-family: var(--mono); }
 
-  /* CSV example table (matches website #setup section) */
   .csv-section { margin-top: 36px; }
-  .csv-heading {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--ink);
-    margin: 0 0 14px;
-    letter-spacing: -.01em;
-  }
   .csv-scroll-hint {
-    text-align: center;
-    font-size: 12px;
-    font-style: italic;
-    color: var(--orange);
-    margin-bottom: 8px;
-    letter-spacing: .02em;
+    text-align: center; font-size: 12px; font-weight: 600;
+    color: var(--accent-ink); margin-bottom: 10px; letter-spacing: .02em;
   }
   .csv-table-wrap {
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, .05), 0 1px 3px rgba(0, 0, 0, .03);
-    background: #fff;
-    scrollbar-width: thin;
-    scrollbar-color: var(--orange) #e5e7eb;
+    border: 1px solid var(--hair); border-radius: 16px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    box-shadow: var(--shadow-sm); background: var(--panel);
+    scrollbar-width: thin; scrollbar-color: var(--accent) #e5e7eb;
   }
   .csv-table-wrap::-webkit-scrollbar { height: 10px; }
-  .csv-table-wrap::-webkit-scrollbar-track {
-    background: #e5e7eb;
-    border-radius: 5px;
-  }
-  .csv-table-wrap::-webkit-scrollbar-thumb {
-    background: var(--orange);
-    border-radius: 5px;
-  }
-  .csv-table-wrap::-webkit-scrollbar-thumb:hover { background: var(--orange-dark); }
-  .csv-table {
-    border-collapse: collapse;
-    font-size: 12.5px;
-    min-width: 100%;
-    white-space: nowrap;
-  }
+  .csv-table-wrap::-webkit-scrollbar-track { background: #eef1f5; border-radius: 5px; }
+  .csv-table-wrap::-webkit-scrollbar-thumb { background: var(--accent); border-radius: 5px; }
+  .csv-table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; white-space: nowrap; }
   .csv-table th {
-    background: linear-gradient(180deg, var(--orange) 0%, var(--orange-dark) 100%);
-    color: #fff;
-    font-weight: 700;
-    text-align: left;
-    padding: 11px 14px;
-    letter-spacing: -.005em;
-    border-right: 1px solid rgba(255, 255, 255, .18);
+    background: #0f1622; color: #fff; font-weight: 600;
+    text-align: left; padding: 12px 15px; letter-spacing: .01em;
+    border-right: 1px solid rgba(255,255,255,.08);
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   }
   .csv-table th:last-child { border-right: none; }
   .csv-table td {
-    padding: 12px 14px;
-    color: var(--ink);
-    border-right: 1px solid var(--line);
-    border-top: 1px solid var(--line);
+    padding: 12px 15px; color: var(--dim);
+    border-right: 1px solid var(--hair); border-top: 1px solid var(--hair);
   }
   .csv-table td:last-child { border-right: none; }
-  .csv-table tbody tr:nth-child(even) td { background: #fafafa; }
+  .csv-table tbody tr:nth-child(even) td { background: #fafbfd; }
   .csv-note {
-    margin-top: 16px;
-    padding: 14px 16px;
-    background: var(--orange-soft);
-    border: 1px solid #ffd4bf;
-    border-radius: 10px;
-    font-size: 13.5px;
-    color: var(--ink);
-    line-height: 1.55;
+    margin-top: 16px; padding: 15px 17px;
+    background: var(--amber-soft); border: 1px solid rgba(217,138,31,.28);
+    border-radius: 12px; font-size: 14px; color: var(--ink); line-height: 1.55;
   }
-  .csv-note strong { color: var(--orange-dark); font-weight: 700; }
+  .csv-note b { color: var(--accent-ink); font-weight: 700; }
 
-  /* ─── Screen 3 — Email Template ───────────────────────────────────── */
-  #screen3 .inner { max-width: 640px; }
-
-  /* ─── Screen 4 — Google Maps API Key ──────────────────────────────── */
-  #screen4 .inner { max-width: 640px; }
-
-  /* ─── Screen 5 — Pick a plan ──────────────────────────────────────── */
-  #screen5 .inner { max-width: 1000px; }
-  .plans {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 18px;
-    margin-bottom: 14px;
-  }
+  /* ════════════════════════════════════════════════════════════════════
+     SCREEN 6 — PLANS
+     ════════════════════════════════════════════════════════════════════ */
+  #screen6 .inner { max-width: 1020px; }
+  .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 14px; }
   .plan {
-    position: relative;
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    padding: 28px 26px;
-    box-shadow: 0 6px 18px rgba(0, 0, 0, .05), 0 1px 3px rgba(0, 0, 0, .04);
-    display: flex;
-    flex-direction: column;
+    position: relative; background: var(--panel);
+    border: 1px solid var(--hair); border-radius: var(--radius);
+    padding: 30px 26px; box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column;
   }
   .plan.recommended {
-    border: 2px solid var(--orange);
-    background: linear-gradient(180deg, #fffaf6 0%, #fff 60%);
-    box-shadow: 0 12px 28px rgba(255, 107, 43, .14), 0 2px 6px rgba(0, 0, 0, .05);
+    border: 2px solid var(--accent);
+    background: linear-gradient(180deg, #fdfaf3 0%, #fff 55%);
+    box-shadow: 0 14px 32px rgba(194,145,47,.14), var(--shadow-sm);
   }
   .plan-tag {
-    position: absolute;
-    top: -11px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--orange);
-    color: #fff;
-    font-weight: 700;
-    font-size: 11px;
-    letter-spacing: .04em;
-    text-transform: uppercase;
-    padding: 4px 10px;
-    border-radius: 100px;
-    box-shadow: 0 4px 10px rgba(255, 107, 43, .35);
+    position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+    background: var(--accent); color: #fff;
+    font-weight: 700; font-size: 11px; letter-spacing: .04em; text-transform: uppercase;
+    padding: 5px 12px; border-radius: 100px;
+    box-shadow: 0 6px 14px rgba(194,145,47,.34);
   }
   .plan-name {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--ink);
-    margin-bottom: 4px;
-    letter-spacing: -.01em;
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 17px; font-weight: 700; color: var(--ink); margin-bottom: 6px; letter-spacing: -.01em;
   }
-  .plan-price {
-    display: flex;
-    align-items: baseline;
-    gap: 4px;
-    margin-bottom: 10px;
-  }
+  .plan-price { display: flex; align-items: baseline; gap: 4px; margin-bottom: 10px; }
   .plan-price .amt {
-    font-size: 38px;
-    font-weight: 800;
-    letter-spacing: -.03em;
-    color: var(--ink);
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-size: 40px; font-weight: 800; letter-spacing: -.03em; color: var(--ink);
   }
-  .plan-price .per {
-    font-size: 14px;
-    color: var(--ink-soft);
-    font-weight: 500;
-  }
-  .plan-tag-line {
-    font-size: 14px;
-    color: var(--ink);
-    font-weight: 600;
-    margin-bottom: 18px;
-    line-height: 1.4;
-  }
-  .plan-feats {
-    list-style: none;
-    margin: 0 0 22px;
-    padding: 0;
-    flex: 1;
-  }
-  .plan-feats li {
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
-    font-size: 13.5px;
-    line-height: 1.5;
-    color: var(--ink-soft);
-    padding: 5px 0;
-  }
-  .plan-feats li::before {
-    content: '✓';
-    color: var(--orange);
-    font-weight: 800;
-    flex-shrink: 0;
-  }
+  .plan-price .per { font-size: 14px; color: var(--dimmer); font-weight: 500; }
+  .plan-tag-line { font-size: 14px; color: var(--ink); font-weight: 600; margin-bottom: 20px; line-height: 1.4; }
+  .plan-feats { list-style: none; margin: 0 0 24px; padding: 0; flex: 1; }
+  .plan-feats li { display: flex; gap: 9px; align-items: flex-start; font-size: 13.5px; line-height: 1.5; color: var(--dim); padding: 5px 0; }
+  .plan-feats li::before { content: '✓'; color: var(--accent); font-weight: 800; flex-shrink: 0; }
   .plan-note {
-    font-size: 12.5px;
-    line-height: 1.5;
-    color: var(--ink-soft);
-    font-style: italic;
-    margin: 0 0 16px;
-    padding: 10px 12px;
-    background: rgba(255, 107, 43, .06);
-    border-left: 2px solid var(--orange);
-    border-radius: 6px;
+    font-size: 12.5px; line-height: 1.5; color: var(--dim);
+    margin: 0 0 16px; padding: 11px 13px;
+    background: var(--accent-soft); border-left: 2px solid var(--accent); border-radius: 8px;
   }
   .plan-cta {
-    display: block;
-    text-align: center;
-    background: #fff;
-    color: var(--orange);
-    border: 2px solid var(--orange);
-    text-decoration: none;
-    font-weight: 700;
-    font-size: 15px;
-    padding: 12px 20px;
-    border-radius: 10px;
-    transition: background .15s, color .15s, box-shadow .15s;
+    display: block; text-align: center;
+    background: var(--panel); color: var(--blue);
+    border: 2px solid var(--blue); text-decoration: none;
+    font-weight: 700; font-size: 15px; padding: 12px 20px;
+    border-radius: 12px; transition: background .15s, color .15s, box-shadow .15s, transform .15s;
   }
   .plan.recommended .plan-cta {
-    background: linear-gradient(180deg, var(--orange) 0%, var(--orange-dark) 100%);
-    color: #fff;
-    border-color: transparent;
-    box-shadow: 0 8px 20px var(--orange-shadow), 0 1px 3px rgba(0, 0, 0, .08);
+    background: var(--blue); color: #fff; border-color: transparent;
+    box-shadow: 0 8px 20px rgba(37,99,235,.32);
   }
-  .plan-cta:hover { background: var(--orange-soft); }
-  .plan.recommended .plan-cta:hover {
-    background: linear-gradient(180deg, var(--orange-dark) 0%, #cf4a14 100%);
-    box-shadow: 0 12px 26px rgba(255, 107, 43, .42), 0 2px 5px rgba(0, 0, 0, .1);
-  }
-  .trial-line {
-    text-align: center;
-    font-size: 12.5px;
-    color: var(--ink-soft);
-    margin-top: 10px;
-  }
+  .plan-cta:hover { background: var(--blue-soft); transform: translateY(-1px); }
+  .plan.recommended .plan-cta:hover { background: var(--blue-ink); box-shadow: 0 12px 26px rgba(37,99,235,.42); }
+  .trial-line { text-align: center; font-size: 12.5px; color: var(--dimmer); margin-top: 10px; }
   .skip-link {
-    display: block;
-    text-align: center;
-    margin: 18px auto 0;
-    font-size: 13px;
-    color: var(--ink-soft);
-    text-decoration: none;
-    cursor: pointer;
-    background: none;
-    border: none;
-    font-family: inherit;
-    padding: 8px 14px;
-    border-radius: 6px;
+    display: block; text-align: center; margin: 20px auto 0;
+    font-size: 14px; color: var(--dimmer); text-decoration: none;
+    cursor: pointer; background: none; border: none; font-family: inherit;
+    padding: 8px 14px; border-radius: 9px;
     transition: color .15s, background .15s;
   }
-  .skip-link:hover {
-    color: var(--orange);
-    background: rgba(0, 0, 0, .03);
+  .skip-link:hover { color: var(--accent-ink); background: var(--accent-soft); }
+
+  /* ════════════════════════════════════════════════════════════════════
+     SCREEN 7 — ACTIVATE SUBSCRIPTION
+     ════════════════════════════════════════════════════════════════════ */
+  #screen7 .inner { max-width: 480px; text-align: center; }
+
+  .act-card {
+    background: var(--panel); border: 1px solid var(--hair);
+    border-radius: 18px; box-shadow: var(--shadow-lg);
+    padding: 38px 38px 32px; margin: 6px 0 0; text-align: center;
+  }
+  .act-brand { display: inline-flex; align-items: center; gap: 9px; margin-bottom: 16px; }
+  .act-brand .brand-mark-sm { width: 30px; height: 30px; font-size: 13px; }
+  .act-brand .name {
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 800; font-size: 22px; color: var(--ink); letter-spacing: -.02em;
+  }
+  .act-tagline { font-size: 15px; color: var(--dim); line-height: 1.5; margin: 0 0 4px; }
+  .act-mailnote {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin: 18px 0 20px;
+    font-size: 13.5px; font-weight: 600; color: var(--accent-ink);
+    background: var(--accent-soft); border: 1px solid #f0dcb4;
+    border-radius: 100px; padding: 8px 16px;
+  }
+  .act-input {
+    width: 100%; box-sizing: border-box; text-align: center;
+    font-family: var(--mono); font-size: 15px; letter-spacing: .06em;
+    color: var(--ink); background: #fff;
+    border: 1.5px solid var(--hair); border-radius: 12px;
+    padding: 15px 16px; margin-bottom: 10px;
+    transition: border-color .15s, box-shadow .15s;
+    outline: none;
+  }
+  .act-input::placeholder { color: var(--faint); }
+  .act-input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(194,145,47,.12); }
+  .act-error {
+    display: none; width: 100%;
+    color: #dc2626; font-size: 13px; margin: 0 0 10px;
+    text-align: center; line-height: 1.4;
+  }
+  .act-btn {
+    width: 100%; box-sizing: border-box;
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 700; font-size: 16px; color: #fff;
+    background: var(--blue); border: none; border-radius: 12px;
+    padding: 15px; cursor: pointer;
+    box-shadow: 0 8px 20px rgba(37,99,235,.28);
+    transition: transform .12s, box-shadow .15s, background .15s;
+  }
+  .act-btn:hover:not(:disabled) { transform: translateY(-1px); background: var(--blue-ink); box-shadow: 0 10px 26px rgba(37,99,235,.34); }
+  .act-btn:disabled { opacity: .7; cursor: default; }
+  .act-divider { height: 1px; background: var(--hair); margin: 26px 0 18px; }
+  .act-noticed { font-size: 14px; color: var(--dim); margin: 0 0 12px; }
+  .act-license {
+    display: block; font-size: 14.5px; font-weight: 700; color: var(--blue);
+    text-decoration: none; background: #f5f8ff; border: 1px solid #dbe6ff;
+    border-radius: 10px; padding: 11px;
+    transition: background .15s, border-color .15s;
+  }
+  .act-license:hover { background: #eaf1ff; border-color: #c4d6ff; }
+  .act-plans { font-size: 12.5px; color: var(--faint); margin: 14px 0 0; }
+
+  /* ════════════════════════════════════════════════════════════════════
+     SHARED — setup step cards, chips
+     ════════════════════════════════════════════════════════════════════ */
+  .setup-card {
+    background: var(--panel); border: 1px solid var(--hair);
+    border-radius: 16px; padding: 6px 28px;
+    box-shadow: var(--shadow-sm); margin-bottom: 30px;
+  }
+  .setup-step {
+    display: flex; gap: 16px; padding: 20px 0;
+    border-bottom: 1px solid var(--hair);
+  }
+  .setup-step:last-child { border-bottom: none; }
+  .setup-num {
+    flex-shrink: 0; width: 34px; height: 34px; border-radius: 10px;
+    background: var(--accent-soft); color: var(--accent-ink);
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 700; font-size: 15px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .setup-body { flex: 1; padding-top: 5px; }
+  .setup-title { font-weight: 500; font-size: 15px; line-height: 1.5; color: var(--ink); }
+  .chip {
+    display: inline-flex; align-items: center;
+    padding: 2px 8px; border-radius: 6px;
+    background: var(--blue-soft); color: var(--blue-ink);
+    font-weight: 600; font-size: 13px; font-family: var(--mono); margin: 0 1px;
   }
 
-  /* ─── Screen 6 — Pin it ───────────────────────────────────────────── */
-  #screen6 .inner { max-width: 640px; }
-  .pin-card {
-    background: #fff;
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    padding: 26px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, .05), 0 2px 6px rgba(0, 0, 0, .04);
-    margin-bottom: 24px;
-  }
-  .pin-steps { list-style: none; margin: 0; padding: 0; }
-  .pin-step {
-    display: flex;
-    gap: 16px;
-    padding: 13px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .pin-step:last-child { border-bottom: none; padding-bottom: 0; }
-  .pin-step:first-child { padding-top: 0; }
-  .pin-num {
-    flex-shrink: 0;
-    width: 28px; height: 28px;
-    border-radius: 50%;
-    background: var(--orange-soft);
-    color: var(--orange);
-    font-weight: 700;
-    font-size: 13px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .pin-title {
-    font-weight: 600;
-    font-size: 14.5px;
-    margin-bottom: 3px;
-    line-height: 1.4;
-  }
-  .pin-detail {
-    font-size: 13px;
-    color: var(--ink-soft);
-    line-height: 1.5;
-  }
-  .pin-detail .chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 7px;
-    border-radius: 5px;
-    background: #f1f1f4;
-    color: var(--ink);
-    font-weight: 600;
-    font-size: 12.5px;
-  }
-  .visual { margin: 22px 0 4px; display: flex; justify-content: center; }
-  .browser-frame {
-    width: 100%;
-    max-width: 420px;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: #fff;
-    overflow: hidden;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, .06);
-  }
-  .browser-bar {
-    background: #f5f5f7;
-    border-bottom: 1px solid var(--line);
-    padding: 9px 11px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-  .dot { width: 9px; height: 9px; border-radius: 50%; background: #ddd; }
-  .dot.r { background: #ff5f57; }
-  .dot.y { background: #febc2e; }
-  .dot.g { background: #28c840; }
-  .browser-spacer { flex: 1; }
-  .browser-icons {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 3px 7px;
-  }
-  .puzzle-highlight { position: relative; }
-  .puzzle-highlight::after {
-    content: '';
-    position: absolute;
-    inset: -6px;
-    border: 2px solid var(--orange);
-    border-radius: 8px;
-    animation: pulse 1.8s ease-in-out infinite;
-    pointer-events: none;
-  }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; transform: scale(1); }
-    50% { opacity: .55; transform: scale(1.08); }
-  }
-  .browser-body { padding: 16px 14px; }
-  .ext-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px;
-    border-radius: 6px;
-    background: var(--orange-soft);
-    border: 1px solid #ffd4bf;
-  }
-  .ext-row + .ext-row { margin-top: 6px; }
-  .ext-mini {
-    width: 20px; height: 20px;
-    border-radius: 5px;
-    background: linear-gradient(135deg, var(--orange) 0%, var(--orange-dark) 100%);
-    color: #fff;
-    font-weight: 800;
-    font-size: 10px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .ext-name {
-    font-size: 13px;
-    font-weight: 600;
-    flex: 1;
-  }
-  .pin-btn {
-    color: var(--orange);
-    font-size: 12.5px;
-    font-weight: 600;
-    padding: 4px 8px;
-    border-radius: 5px;
-    background: #fff;
-    border: 1px solid #ffd4bf;
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  /* ─── Primary CTA button ──────────────────────────────────────────── */
-  .cta {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin-top: 8px;
-  }
+  /* ════════════════════════════════════════════════════════════════════
+     PRIMARY CTA BUTTON
+     ════════════════════════════════════════════════════════════════════ */
+  .cta { display: flex; flex-direction: column; align-items: center; margin-top: 8px; }
+  #screen1 .cta { align-items: center; }
   .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    background: linear-gradient(180deg, var(--orange) 0%, var(--orange-dark) 100%);
-    color: #fff;
-    font-weight: 700;
-    font-size: 16px;
-    letter-spacing: -.005em;
-    padding: 16px 36px;
-    border: none;
-    border-radius: 14px;
-    cursor: pointer;
-    box-shadow: 0 10px 24px var(--orange-shadow), 0 2px 4px rgba(0, 0, 0, .08);
-    transition: transform .15s, box-shadow .15s;
-    font-family: inherit;
+    display: inline-flex; align-items: center; gap: 10px; white-space: nowrap;
+    background: var(--blue); color: #fff;
+    font-family: 'Gabarito', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    font-weight: 700; font-size: 16px; letter-spacing: -.01em;
+    padding: 15px 34px; border: none; border-radius: 14px; cursor: pointer;
+    box-shadow: 0 8px 20px rgba(37,99,235,.30);
+    transition: transform .15s, box-shadow .15s, background .15s;
   }
-  .btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 14px 30px rgba(255, 107, 43, .42), 0 2px 5px rgba(0, 0, 0, .1);
-  }
-  .btn:active {
-    transform: translateY(0);
-    box-shadow: 0 4px 10px rgba(255, 107, 43, .3);
-  }
-  .btn .arrow {
-    font-size: 20px;
-    line-height: 1;
-    transition: transform .2s ease;
-  }
+  .btn:hover { transform: translateY(-2px); background: var(--blue-ink); box-shadow: 0 14px 30px rgba(37,99,235,.42); }
+  .btn:active { transform: translateY(0); box-shadow: 0 4px 12px rgba(37,99,235,.32); }
+  .btn .arrow { font-size: 19px; line-height: 1; transition: transform .2s ease; }
   .btn:hover .arrow { transform: translateX(3px); }
-  .footer-note {
-    text-align: center;
-    margin-top: 14px;
-    font-size: 13px;
-    color: var(--ink-soft);
-  }
+  .footer-note { text-align: center; margin-top: 14px; font-size: 13px; color: var(--dimmer); }
 
   /* ─── Page indicator dots ─────────────────────────────────────────── */
   .dots {
-    position: fixed;
-    bottom: 24px;
-    left: 0; right: 0;
-    display: flex;
-    justify-content: center;
-    gap: 8px;
-    z-index: 10;
+    position: fixed; bottom: 26px; left: 0; right: 0;
+    display: flex; justify-content: center; gap: 8px; z-index: 10;
   }
   .pdot {
-    width: 7px; height: 7px;
-    border-radius: 50%;
-    background: var(--ink-faint);
-    opacity: .4;
-    transition: opacity .25s, background .25s, width .25s, border-radius .25s;
+    width: 7px; height: 7px; border-radius: 50%; background: var(--faint);
+    transition: background .25s, width .25s, border-radius .25s;
   }
-  .pdot.active {
-    background: var(--orange);
-    opacity: 1;
-    width: 22px;
-    border-radius: 4px;
-  }
+  .pdot.active { background: var(--blue); width: 24px; border-radius: 4px; }
 
   /* ─── Mobile ──────────────────────────────────────────────────────── */
-  @media (max-width: 720px) {
-    h1.hero { font-size: 34px; }
-    h2.title { font-size: 26px; }
-    .subtext { font-size: 16px; }
+  @media (max-width: 760px) {
     .plans { grid-template-columns: 1fr; }
-    .plan-price .amt { font-size: 32px; }
-    .logo-mark { width: 72px; height: 72px; font-size: 36px; }
-    .setup-card { padding: 8px 22px; }
-    .pin-card { padding: 22px; }
-    .rpm-mockup { grid-template-columns: 1fr; }
-    .rpm-map-side { border-right: none; border-bottom: 1px solid var(--line); }
+    .tpl-grid { grid-template-columns: 1fr; }
+    .rpm-body { grid-template-columns: 1fr; }
+    .rpm-map { border-right: none; border-bottom: 1px solid var(--hair); min-height: 180px; }
   }
 </style>
 </head>
@@ -979,39 +660,356 @@
 
   <div class="deck" id="deck">
 
-    <!-- ─── Screen 1 — Welcome ─────────────────────────────────────── -->
+    <!-- ════════════════ SCREEN 1 · WELCOME ════════════════ -->
     <section class="screen active" id="screen1">
+      <div class="hero-aurora" aria-hidden="true">
+        <div class="hero-grid-floor"></div>
+        <div class="glow-steel"></div>
+        <div class="glow-amber"></div>
+      </div>
       <div class="inner">
-        <div class="logo-mark">L</div>
+        <div class="logo-mark">IQ</div>
         <div class="wordmark">LaneIQ</div>
 
-        <h1 class="hero">Know Before You Negotiate</h1>
+        <h1 class="hero">Know Before<br>You <span class="accent">Negotiate</span></h1>
         <p class="subtext">
-          See <span class="em">what that lane actually paid</span> — right inside DAT, before you pick up the phone.
+          LaneIQ puts <b>your own TMS data</b> right on the load board — what you personally booked a lane for, pulled from your multi-year history, on the load row. Not a market average. <b>Your numbers.</b>
         </p>
 
         <div class="cta">
-          <button class="btn" data-go="2">
-            Get Started
-            <span class="arrow">→</span>
-          </button>
+          <button class="btn" data-go="2">Get Started <span class="arrow">→</span></button>
         </div>
       </div>
     </section>
 
-    <!-- ─── Screen 2 — Setup ───────────────────────────────────────── -->
+    <!-- ════════════════ SCREEN 2 · LOAD HISTORY ════════════════ -->
     <section class="screen" id="screen2">
       <button class="back-link" data-go="1">← Back</button>
       <div class="inner">
         <div class="brand-row">
-          <span class="brand-mark-sm">L</span>
+          <span class="brand-mark-sm">IQ</span>
           <span class="brand-name-sm">LaneIQ</span>
         </div>
 
-        <h2 class="title title-display">How to prepare your data.</h2>
-        <p class="sub sub-display">Export your load history as a CSV from any TMS or spreadsheet. LaneIQ recognizes common column name variations automatically.</p>
+        <h2 class="title">Your past loads, <span class="accent">matched to your search</span></h2>
+        <p class="sub">As you search a lane on DAT, LaneIQ looks back through your own multi-year history — widen the radius around each city and instantly see every load you've personally booked nearby, with the exact rate you got. Not a market average. <b>Your numbers.</b></p>
 
-        <div class="col-table-wrap">
+        <div class="lh-panel" role="img" aria-label="LaneIQ Load History panel">
+          <div class="lh-winbar">
+            <span class="lh-wintitle">◈ Load History <span class="lh-hint">drag to move</span></span>
+            <span class="lh-winbtns"><span class="wb">–</span><span class="wb">✕</span></span>
+          </div>
+          <div class="lh-search">
+            <span class="mag"></span>
+            <span class="ph">Search origin, destination, broker, shipper, receiver…</span>
+          </div>
+          <div class="lh-main">
+            <div class="lh-rail">
+              <span class="lh-tab on">Load History</span>
+              <span class="lh-tab">Preferred</span>
+              <span class="lh-tab">Hot Regions</span>
+              <span class="lh-tab">Templates</span>
+              <span class="lh-tab">Setup</span>
+              <span class="lh-tab">Notes</span>
+            </div>
+            <div class="lh-body">
+              <div class="lh-seclbl">Lane Lookup</div>
+              <div class="lh-field"><span class="k">From</span><span class="box">Reno, NV</span></div>
+              <div class="lh-field slider"><span class="k">Origin radius</span><span class="lh-slider" style="--p:57%"></span><span class="lh-slider-val">200 mi</span></div>
+              <div class="lh-field"><span class="k">To</span><span class="box">Perth Amboy, NJ</span></div>
+              <div class="lh-field slider"><span class="k">Dest radius</span><span class="lh-slider" style="--p:72%"></span><span class="lh-slider-val">250 mi</span></div>
+
+              <div class="lh-route">Reno, NV <span class="arr">→</span> Perth Amboy, NJ</div>
+              <div class="lh-stats">
+                <div class="lh-stat avg"><div class="sk">Avg</div><div class="sv">$7,030</div></div>
+                <div class="lh-stat best"><div class="sk">Best</div><div class="sv">$8,900</div></div>
+              </div>
+              <div class="lh-count">57 loads in radius</div>
+
+              <div class="lh-cards">
+                <div class="lh-card">
+                  <div class="lh-card-top"><span class="id">#79075</span><span class="heart">♡</span></div>
+                  <div class="co">WHY LOGISTICS LLC</div>
+                  <span class="eq">Dry Van</span>
+                  <div class="cgrid">
+                    <span class="ck">Rate</span><span class="cv rate">$7,200</span>
+                    <span class="ck">From</span><span class="cv">Yuba City, CA 95993</span>
+                    <span class="ck">To</span><span class="cv">Fleetwood, PA 19522</span>
+                  </div>
+                </div>
+                <div class="lh-card">
+                  <div class="lh-card-top"><span class="id">#77546</span><span class="heart">♡</span></div>
+                  <div class="co">WHY LOGISTICS LLC</div>
+                  <span class="eq">Dry Van</span>
+                  <div class="cgrid">
+                    <span class="ck">Rate</span><span class="cv rate">$6,850</span>
+                    <span class="ck">From</span><span class="cv">Yuba City, CA 95993</span>
+                    <span class="ck">To</span><span class="cv">Fleetwood, PA 19522</span>
+                  </div>
+                </div>
+                <div class="lh-card">
+                  <div class="lh-card-top"><span class="id">#2002546615</span><span class="heart">♡</span></div>
+                  <div class="co">MOLO SOLUTIONS LLC</div>
+                  <span class="eq">Dry Van</span>
+                  <div class="cgrid">
+                    <span class="ck">Rate</span><span class="cv rate">$7,200</span>
+                    <span class="ck">From</span><span class="cv">Yuba City, CA 95991</span>
+                    <span class="ck">To</span><span class="cv">Fleetwood, PA 19522</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel-caption">Every match is a load you actually ran — pulled straight from your uploaded history, scored against the lane you're searching.</div>
+
+        <div class="cta">
+          <button class="btn" data-go="3">Next <span class="arrow">→</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════════════ SCREEN 3 · EMAIL TEMPLATE ════════════════ -->
+    <section class="screen" id="screen3">
+      <button class="back-link" data-go="2">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">IQ</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">One-click email, <span class="accent">three ready templates</span></h2>
+        <p class="sub">LaneIQ adds a one-click email button to every load row on DAT. Pick one of three ready-made templates — Gmail opens pre-filled with the broker's address, subject, and your message, ready to send in seconds.</p>
+
+        <div class="tpl-grid">
+          <button class="tpl-card" data-tpl="quick" type="button">
+            <span class="tpl-active-badge">✓ Active</span>
+            <div class="tpl-top">
+              <span class="tpl-name">Quick Quote</span>
+              <span class="tpl-tag">Short</span>
+            </div>
+            <p class="tpl-preview">Is your <span class="v">{origin}</span> → <span class="v">{dest}</span> load still available? What's your best rate?</p>
+          </button>
+          <button class="tpl-card active" data-tpl="friendly" type="button">
+            <span class="tpl-active-badge">✓ Active</span>
+            <div class="tpl-top">
+              <span class="tpl-name">Friendly Intro</span>
+              <span class="tpl-tag">Recommended</span>
+            </div>
+            <p class="tpl-preview">Hi, this is <span class="v">{name}</span> with <span class="v">{company}</span>. Tell me more about your load from <span class="v">{origin}</span>…</p>
+          </button>
+          <button class="tpl-card" data-tpl="detailed" type="button">
+            <span class="tpl-active-badge">✓ Active</span>
+            <div class="tpl-top">
+              <span class="tpl-name">Detailed</span>
+              <span class="tpl-tag">Thorough</span>
+            </div>
+            <p class="tpl-preview">Interested in your <span class="v">{origin}</span> load on <span class="v">{date}</span>. Could you share rate, weight, and pickup window?</p>
+          </button>
+        </div>
+
+        <div class="gmail-compose" role="img" aria-label="Gmail compose preview">
+          <div class="gmail-header">
+            <span class="gmail-title">New Message</span>
+            <span class="gmail-header-actions">
+              <span aria-hidden="true">⤢</span>
+              <span aria-hidden="true">✕</span>
+            </span>
+          </div>
+          <div class="gmail-field">
+            <span class="gmail-label">To</span>
+            <span class="gmail-value">broker@example.com</span>
+          </div>
+          <div class="gmail-field">
+            <span class="gmail-label">Subject</span>
+            <span class="gmail-value" id="gmailSubject">Load Inquiry – <span class="hl">Sacramento, CA</span> → <span class="hl">Chicago, IL</span></span>
+          </div>
+          <div class="gmail-body" id="gmailBody">Hi,
+
+This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Please tell me more about your load from <span class="hl">Sacramento, CA</span>, pickup on <span class="hl">01/15</span>, going to <span class="hl">Chicago, IL</span>, posted on DAT today.</div>
+        </div>
+
+        <div class="tip-note">
+          <b>Make it yours:</b> Open the LaneIQ panel on any DAT load → <b>Templates</b> tab → edit any of the three, set your name and company once, and connect Gmail for true one-click sending.
+        </div>
+
+        <div class="cta">
+          <button class="btn" data-go="4">Next <span class="arrow">→</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════════════ SCREEN 4 · MAPS & RPM — BUILT IN ════════════════ -->
+    <section class="screen" id="screen4">
+      <button class="back-link" data-go="3">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">IQ</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">Deadhead miles &amp; <span class="accent">RPM</span> — built in</h2>
+        <p class="sub">LaneIQ routes every calculation through its built-in backend — deadhead miles, route time, and RPM all appear automatically the moment you click a load row. <b>No API key or setup required.</b></p>
+
+        <div class="built-in-badge" aria-hidden="true">
+          ✓ Maps built in · zero setup
+        </div>
+
+        <div class="rpm-panel" role="img" aria-label="LaneIQ RPM calculator panel">
+          <div class="rpm-winbar">
+            <span class="rpm-wintitle">Reno, NV <span class="arr">→</span> New Haven, CT</span>
+            <span class="rpm-winbtns"><span class="wb">–</span><span class="wb">✕</span></span>
+          </div>
+          <div class="rpm-tabs">
+            <span class="rpm-tab">Lathrop, CA → Carlisle, PA <span class="x">✕</span></span>
+            <span class="rpm-tab active">Reno, NV → New Haven… <span class="x">✕</span></span>
+          </div>
+          <div class="rpm-body">
+            <div class="rpm-map">
+              <svg viewBox="0 0 440 340" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" preserveAspectRatio="xMidYMid slice">
+                <rect width="440" height="340" fill="#a9cce6"/>
+                <path d="M 25 95 C 20 80 35 72 55 70 L 150 60 L 280 56 L 380 64 C 410 68 428 86 420 108 L 424 150 C 428 180 415 196 395 196 L 398 214 C 396 230 384 236 372 230 L 360 236 C 352 242 348 230 350 220 L 330 224 L 300 226 C 280 230 272 240 262 250 L 250 244 L 210 240 L 150 236 C 95 232 60 224 48 200 L 32 165 C 22 140 22 116 25 95 Z" fill="#e7eadf" stroke="#cdd2c6" stroke-width="1"/>
+                <ellipse cx="296" cy="118" rx="13" ry="6" fill="#a9cce6"/>
+                <ellipse cx="312" cy="128" rx="9" ry="6" fill="#a9cce6"/>
+                <ellipse cx="280" cy="126" rx="7" ry="5" fill="#a9cce6"/>
+                <path d="M 60 180 L 200 175 L 330 150" fill="none" stroke="#d4d8cd" stroke-width="2"/>
+                <path d="M 175 90 L 185 240" fill="none" stroke="#d4d8cd" stroke-width="1.5"/>
+                <g fill="#8b94a1" font-family="-apple-system, sans-serif" font-size="8">
+                  <circle cx="48" cy="182" r="2"/><text x="53" y="185">San Francisco</text>
+                  <circle cx="95" cy="196" r="2"/><text x="100" y="199">Las Vegas</text>
+                  <circle cx="175" cy="172" r="2"/><text x="180" y="169">Denver</text>
+                  <circle cx="212" cy="216" r="2"/><text x="217" y="219">Dallas</text>
+                  <circle cx="290" cy="142" r="2"/><text x="295" y="139">Chicago</text>
+                  <circle cx="388" cy="152" r="2"/><text x="350" y="172">New York</text>
+                </g>
+                <path d="M 64 176 Q 230 108 390 150" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round"/>
+                <path d="M 64 176 Q 230 108 390 150" fill="none" stroke="#1a73e8" stroke-width="3.4" stroke-linecap="round"/>
+                <g transform="translate(64,178)">
+                  <path d="M0 0 C -2 -6 -9 -10 -9 -18 a 9 9 0 1 1 18 0 C 9 -10 2 -6 0 0 Z" fill="#6b7480"/>
+                  <circle cx="0" cy="-18" r="5" fill="#fff"/>
+                  <text x="0" y="-15" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="8" font-weight="700" fill="#6b7480">A</text>
+                </g>
+                <g transform="translate(390,150)">
+                  <path d="M0 0 C -2 -6 -9 -10 -9 -18 a 9 9 0 1 1 18 0 C 9 -10 2 -6 0 0 Z" fill="#2f9d57"/>
+                  <circle cx="0" cy="-18" r="5" fill="#fff"/>
+                  <text x="0" y="-15" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="8" font-weight="700" fill="#2f9d57">B</text>
+                </g>
+              </svg>
+              <span class="rpm-gmark">Google</span>
+              <span class="rpm-attr">Map data ©2026 Google</span>
+              <div class="rpm-map-foot">
+                <span>Loaded <b>2,767 mi</b> · 1 day 16 hrs</span>
+                <span class="sep">|</span>
+                <span>DH <b>132 mi</b> · 2 hrs 13 mins</span>
+              </div>
+            </div>
+            <div class="rpm-calc">
+              <div class="rpm-calc-label">RPM Calculator</div>
+              <div class="rpm-field"><span class="k">Rate</span><span class="inp focus"><span class="pre">$</span><span class="val">11,000</span></span></div>
+              <div class="rpm-field"><span class="k">Miles</span><span class="inp"><span class="val">2,767</span></span></div>
+              <div class="rpm-calc-row"><span class="k">RPM</span><span class="v accent">$3.98/mi</span></div>
+              <div class="rpm-div"></div>
+              <div class="rpm-field"><span class="k">DH From</span><span class="inp"><span class="val">Sacramento, CA</span></span></div>
+              <div class="rpm-field"><span class="k">DH Miles</span><span class="inp"><span class="val">132</span><span class="suf">mi</span></span></div>
+              <div class="rpm-div"></div>
+              <div class="rpm-field"><span class="k">MPG</span><span class="inp"><span class="val">6.5</span></span></div>
+              <div class="rpm-field"><span class="k">Fuel</span><span class="inp"><span class="pre">$</span><span class="val">3.89</span><span class="suf">/gal</span></span></div>
+              <div class="rpm-calc-row"><span class="k">Fuel Cost</span><span class="v">$1,735</span></div>
+              <div class="rpm-div"></div>
+              <div class="rpm-field"><span class="k">Driver $/mi</span><span class="inp"><span class="pre">$</span><span class="val">0.68</span></span></div>
+              <div class="rpm-calc-row"><span class="k">Driver Cost</span><span class="v">$1,971</span></div>
+              <div class="rpm-field"><span class="k">Tolls</span><span class="inp"><span class="pre">$</span><span class="val">0</span></span></div>
+              <div class="rpm-calc-row"><span class="k">Profit</span><span class="v green">$7,294</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="rpm-caption">LaneIQ fills in every number automatically — rate, miles, deadhead, fuel, and profit — the moment you click a load row.</div>
+
+        <div class="cta">
+          <button class="btn" data-go="5">Next <span class="arrow">→</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════════════ SCREEN 5 · DATA SETUP ════════════════ -->
+    <section class="screen" id="screen5">
+      <button class="back-link" data-go="4">← Back</button>
+      <div class="inner">
+        <div class="brand-row">
+          <span class="brand-mark-sm">IQ</span>
+          <span class="brand-name-sm">LaneIQ</span>
+        </div>
+
+        <h2 class="title">Upload your <span class="accent">TMS CSV file</span></h2>
+        <p class="sub">Export your load history as a CSV from any TMS or spreadsheet. LaneIQ recognizes common column-name variations automatically.</p>
+
+        <div class="csv-section">
+          <div class="csv-scroll-hint">← Scroll to see all columns →</div>
+          <div class="csv-table-wrap">
+            <table class="csv-table">
+              <thead>
+                <tr>
+                  <th>Load #</th>
+                  <th>Broker</th>
+                  <th>Origin</th>
+                  <th>Date</th>
+                  <th>Destination</th>
+                  <th>Rate</th>
+                  <th>Weight</th>
+                  <th>Pickup</th>
+                  <th>Delivery</th>
+                  <th>Commodity</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>12345</td>
+                  <td>Echo Global</td>
+                  <td>Sacramento, CA</td>
+                  <td>01/15/2024</td>
+                  <td>Chicago, IL</td>
+                  <td>$4,500.00</td>
+                  <td>42,000 LB</td>
+                  <td>ABC Freight, 123 Main St, Sacramento CA</td>
+                  <td>XYZ Logistics, 456 Oak Ave, Chicago IL</td>
+                  <td>General Freight</td>
+                </tr>
+                <tr>
+                  <td>12346</td>
+                  <td>Coyote Logistics</td>
+                  <td>Fresno, CA</td>
+                  <td>02/03/2024</td>
+                  <td>Dallas, TX</td>
+                  <td>$3,200.00</td>
+                  <td>38,000 LB</td>
+                  <td>Farm Fresh Co, 789 Valley Rd, Fresno CA</td>
+                  <td>Texas Depot, 321 Commerce St, Dallas TX</td>
+                  <td>Food &amp; Beverage</td>
+                </tr>
+                <tr>
+                  <td>12347</td>
+                  <td>XPO Logistics</td>
+                  <td>Los Angeles, CA</td>
+                  <td>02/18/2024</td>
+                  <td>Atlanta, GA</td>
+                  <td>$5,800.00</td>
+                  <td>44,000 LB</td>
+                  <td>LA Warehouse, 555 Harbor Blvd, Los Angeles CA</td>
+                  <td>ATL Distribution, 900 Peach St, Atlanta GA</td>
+                  <td>Refrigerated</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="csv-note">
+            Don't worry if your CSV doesn't have all these columns — LaneIQ works with whatever you have.
+            <b>Only Origin is required.</b>
+          </div>
+        </div>
+
+        <div class="col-table-wrap" style="margin-top:28px;">
           <table class="col-table">
             <thead>
               <tr>
@@ -1081,332 +1079,29 @@
           </table>
         </div>
 
-        <div class="csv-section">
-          <div class="csv-scroll-hint">← Scroll to see all columns →</div>
-          <div class="csv-table-wrap">
-            <table class="csv-table">
-              <thead>
-                <tr>
-                  <th>Load #</th>
-                  <th>Broker</th>
-                  <th>Origin</th>
-                  <th>Date</th>
-                  <th>Destination</th>
-                  <th>Rate</th>
-                  <th>Weight</th>
-                  <th>Pickup</th>
-                  <th>Delivery</th>
-                  <th>Commodity</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>12345</td>
-                  <td>Echo Global</td>
-                  <td>Sacramento, CA</td>
-                  <td>01/15/2024</td>
-                  <td>Chicago, IL</td>
-                  <td>$4,500.00</td>
-                  <td>42,000 LB</td>
-                  <td>ABC Freight, 123 Main St, Sacramento CA</td>
-                  <td>XYZ Logistics, 456 Oak Ave, Chicago IL</td>
-                  <td>General Freight</td>
-                </tr>
-                <tr>
-                  <td>12346</td>
-                  <td>Coyote Logistics</td>
-                  <td>Fresno, CA</td>
-                  <td>02/03/2024</td>
-                  <td>Dallas, TX</td>
-                  <td>$3,200.00</td>
-                  <td>38,000 LB</td>
-                  <td>Farm Fresh Co, 789 Valley Rd, Fresno CA</td>
-                  <td>Texas Depot, 321 Commerce St, Dallas TX</td>
-                  <td>Food &amp; Beverage</td>
-                </tr>
-                <tr>
-                  <td>12347</td>
-                  <td>XPO Logistics</td>
-                  <td>Los Angeles, CA</td>
-                  <td>02/18/2024</td>
-                  <td>Atlanta, GA</td>
-                  <td>$5,800.00</td>
-                  <td>44,000 LB</td>
-                  <td>LA Warehouse, 555 Harbor Blvd, Los Angeles CA</td>
-                  <td>ATL Distribution, 900 Peach St, Atlanta GA</td>
-                  <td>Refrigerated</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <div class="csv-note">
-            Don't worry if your CSV doesn't have all these columns — LaneIQ works with whatever you have.
-            <strong>Only Origin is required.</strong>
-          </div>
-        </div>
-
-        <div class="setup-card" style="margin-top: 32px">
-          <div class="setup-step">
-            <span class="setup-num">1</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Upload your CSV rate history in the extension popup
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="cta">
-          <button class="btn" data-go="3">
-            Next
-            <span class="arrow">→</span>
-          </button>
+        <div class="cta" style="margin-top:28px;">
+          <button class="btn" data-go="6">Next <span class="arrow">→</span></button>
         </div>
       </div>
     </section>
 
-    <!-- ─── Screen 3 — Email Template ──────────────────────────────── -->
-    <section class="screen" id="screen3">
-      <button class="back-link" data-go="2">← Back</button>
+    <!-- ════════════════ SCREEN 6 · PLANS ════════════════ -->
+    <section class="screen" id="screen6">
+      <button class="back-link" data-go="5">← Back</button>
       <div class="inner">
         <div class="brand-row">
-          <span class="brand-mark-sm">L</span>
+          <span class="brand-mark-sm">IQ</span>
           <span class="brand-name-sm">LaneIQ</span>
         </div>
 
-        <h2 class="title">Set Up Your <span class="accent">Email Template</span></h2>
-        <p class="sub">LaneIQ adds a one-click email button to every load row on DAT. When clicked, it opens Gmail with a pre-filled message to the broker — ready to send in seconds.</p>
-
-        <div class="setup-card">
-          <div class="setup-step">
-            <span class="setup-num">1</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Click any highlighted load row on DAT to open the rate panel
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <span class="setup-num">2</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Click the email button next to the broker contact
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <span class="setup-num">3</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Gmail opens with the broker's email, subject line, and your message pre-filled
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="gmail-compose" role="img" aria-label="Gmail compose preview">
-          <div class="gmail-header">
-            <span>New Message</span>
-            <span class="gmail-header-actions">
-              <span aria-hidden="true">⤢</span>
-              <span aria-hidden="true">✕</span>
-            </span>
-          </div>
-          <div class="gmail-field">
-            <span class="gmail-label">To</span>
-            <span class="gmail-value">broker@example.com</span>
-          </div>
-          <div class="gmail-field">
-            <span class="gmail-label">Subject</span>
-            <span class="gmail-value">Load Inquiry – <span class="hl">Sacramento, CA</span> → <span class="hl">Chicago, IL</span></span>
-          </div>
-          <div class="gmail-body">Hi,
-
-This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Please tell me more about your load from <span class="hl">Sacramento, CA</span>, pickup on <span class="hl">01/15</span>, going to <span class="hl">Chicago, IL</span>, posted on DAT today.</div>
-        </div>
-
-        <div class="field-legend">
-          <div class="row">
-            <strong>🔄 Auto-filled:</strong>
-            <span class="vars">origin, destination, date</span>
-          </div>
-          <div class="row">
-            <strong>✏️ Set once in popup:</strong>
-            <span class="vars">your name, company name</span>
-          </div>
-        </div>
-
-        <div class="tip-note">
-          <strong>Customize your template:</strong> Open the LaneIQ panel on any DAT load → go to the <strong>Templates</strong> tab → edit your subject line, message body, and connect your Gmail for one-click sending.
-        </div>
-
-        <div class="cta">
-          <button class="btn" data-go="4">
-            Next
-            <span class="arrow">→</span>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <!-- ─── Screen 4 — Google Maps API Key ─────────────────────────── -->
-    <section class="screen" id="screen4">
-      <button class="back-link" data-go="3">← Back</button>
-      <div class="inner">
-        <div class="brand-row">
-          <span class="brand-mark-sm">L</span>
-          <span class="brand-name-sm">LaneIQ</span>
-        </div>
-
-        <h2 class="title">Enable Deadhead Miles &amp; <span class="accent">RPM</span></h2>
-        <p class="sub">LaneIQ uses Google Maps to calculate deadhead miles from your location to the load origin, and automatically computes your RPM. This requires a free Google Maps API key.</p>
-
-        <div class="rpm-mockup" role="img" aria-label="RPM calculator preview">
-          <div class="rpm-map-side">
-            <svg class="rpm-map-svg" viewBox="0 0 400 220" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <!-- Simplified US outline -->
-              <path d="M 40 50
-                       L 340 45
-                       L 365 60
-                       L 372 90
-                       L 370 122
-                       L 355 145
-                       L 362 172
-                       L 348 178
-                       L 320 172
-                       L 280 170
-                       L 240 172
-                       L 215 188
-                       L 190 178
-                       L 150 172
-                       L 110 168
-                       L 75 162
-                       L 55 145
-                       L 42 120
-                       L 38 85
-                       L 40 50 Z"
-                    fill="#f5f5f7"
-                    stroke="#d4d4d8"
-                    stroke-width="1.5"
-                    stroke-linejoin="round"/>
-              <!-- Route line: California → Maryland -->
-              <path d="M 75 108 Q 200 60 325 90"
-                    fill="none"
-                    stroke="#0058e0"
-                    stroke-width="2.5"
-                    stroke-dasharray="6 4"
-                    stroke-linecap="round"/>
-              <!-- Point A — Sacramento, CA -->
-              <circle cx="75" cy="108" r="11" fill="#0058e0"/>
-              <text x="75" y="113" text-anchor="middle"
-                    font-family="-apple-system, sans-serif"
-                    font-size="11" font-weight="700" fill="#fff">A</text>
-              <!-- Point B — Maryland -->
-              <circle cx="325" cy="90" r="11" fill="#0058e0"/>
-              <text x="325" y="95" text-anchor="middle"
-                    font-family="-apple-system, sans-serif"
-                    font-size="11" font-weight="700" fill="#fff">B</text>
-            </svg>
-            <div class="rpm-map-stats">
-              Loaded 2,689 mi · 1 day 15 hrs<br>
-              DH 35 mi · 40 mins
-            </div>
-          </div>
-          <div class="rpm-calc">
-            <div class="rpm-calc-label">RPM Calculator</div>
-            <div class="rpm-row"><span class="k">Rate</span><span class="v">$10,500</span></div>
-            <div class="rpm-row"><span class="k">Miles</span><span class="v">2,689</span></div>
-            <div class="rpm-row"><span class="k">RPM</span><span class="v hi-orange">$3.90/mi</span></div>
-            <div class="rpm-row"><span class="k">DH From</span><span class="v">Sacramento, CA</span></div>
-            <div class="rpm-row"><span class="k">DH Miles</span><span class="v">35 mi</span></div>
-            <div class="rpm-row"><span class="k">Fuel Cost</span><span class="v">$1,630</span></div>
-            <div class="rpm-row"><span class="k">Profit</span><span class="v hi-green">$8,870</span></div>
-          </div>
-        </div>
-
-        <div class="rpm-caption">
-          LaneIQ calculates all of this automatically — the moment you click a load row.
-        </div>
-
-        <div class="setup-card">
-          <div class="setup-step">
-            <span class="setup-num">1</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Go to
-                <a class="link" href="https://console.cloud.google.com" target="_blank" rel="noopener">console.cloud.google.com</a>
-                and sign in with your Google account
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <span class="setup-num">2</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Create a new project (or select an existing one)
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <span class="setup-num">3</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Enable the <span class="chip">Maps JavaScript API</span> and <span class="chip">Distance Matrix API</span>
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <span class="setup-num">4</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Go to <span class="chip">Credentials</span> → <span class="chip">Create API Key</span> → copy it
-              </div>
-            </div>
-          </div>
-          <div class="setup-step">
-            <span class="setup-num">5</span>
-            <div class="setup-body">
-              <div class="setup-title">
-                Paste the key into the LaneIQ popup under <span class="chip">Settings → Google Maps API Key</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="warm-note">
-          <strong>Free for normal use.</strong> Google Maps API has a generous monthly free tier — you won't be charged for typical dispatcher usage.
-        </div>
-
-        <div class="cta">
-          <button class="btn" data-go="5">
-            Next
-            <span class="arrow">→</span>
-          </button>
-        </div>
-      </div>
-    </section>
-
-    <!-- ─── Screen 5 — Pick a plan ─────────────────────────────────── -->
-    <section class="screen" id="screen5">
-      <button class="back-link" data-go="4">← Back</button>
-      <div class="inner">
-        <div class="brand-row">
-          <span class="brand-mark-sm">L</span>
-          <span class="brand-name-sm">LaneIQ</span>
-        </div>
-
-        <h2 class="title">Start Your Free <span class="accent">30-Day Trial</span></h2>
-        <p class="sub">Pick the plan that fits how you book. Cancel anytime, no card charge during trial.</p>
+        <h2 class="title">Start your free <span class="accent">30-day trial</span></h2>
+        <p class="sub">Pick the plan that fits how you book. Cancel anytime — no card charge during the trial.</p>
 
         <div class="plans">
-          <!-- Free Trial (primary CTA, recommended) -->
           <div class="plan recommended">
             <div class="plan-tag">Free Trial</div>
             <div class="plan-name">Try it free</div>
-            <div class="plan-price">
-              <span class="amt">Free</span>
-            </div>
+            <div class="plan-price"><span class="amt">Free</span></div>
             <div class="plan-tag-line">Full Pro access for 30 days</div>
             <ul class="plan-feats">
               <li>Full Pro access</li>
@@ -1416,19 +1111,13 @@ This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Pleas
               <li>One-click broker email</li>
               <li>No credit card required</li>
             </ul>
-            <a class="plan-cta" data-stripe href="https://buy.stripe.com/cNi4gy7nb4pQ1ao1CV5EY03" target="_blank" rel="noopener">
-              Start Free Trial
-            </a>
+            <a class="plan-cta" data-stripe href="https://buy.stripe.com/cNi4gy7nb4pQ1ao1CV5EY03" target="_blank" rel="noopener">Start Free Trial</a>
             <div class="trial-line">30 days free · No credit card required</div>
           </div>
 
-          <!-- Solo -->
           <div class="plan">
             <div class="plan-name">Solo</div>
-            <div class="plan-price">
-              <span class="amt">$19</span>
-              <span class="per">/mo</span>
-            </div>
+            <div class="plan-price"><span class="amt">$19</span><span class="per">/mo</span></div>
             <div class="plan-tag-line">Your CSV data on DAT</div>
             <ul class="plan-feats">
               <li>Upload your own rate history (CSV)</li>
@@ -1436,18 +1125,12 @@ This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Pleas
               <li>Past-rate panel for every load</li>
               <li>Google Maps deadhead miles</li>
             </ul>
-            <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gM14mazng8ydXabdv5EY02" target="_blank" rel="noopener">
-              Get Solo
-            </a>
+            <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gM14mazng8ydXabdv5EY02" target="_blank" rel="noopener">Get Solo</a>
           </div>
 
-          <!-- Pro -->
           <div class="plan">
             <div class="plan-name">Pro</div>
-            <div class="plan-price">
-              <span class="amt">$39</span>
-              <span class="per">/mo</span>
-            </div>
+            <div class="plan-price"><span class="amt">$39</span><span class="per">/mo</span></div>
             <div class="plan-tag-line">Your CSV + 6,700+ Verified Market Rates</div>
             <ul class="plan-feats">
               <li>Everything in Solo</li>
@@ -1456,101 +1139,58 @@ This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Pleas
               <li>Weight, pallets, and equipment data included</li>
               <li>Strongest match accuracy — even without your own CSV</li>
             </ul>
-            <div class="plan-note">
-              Perfect if you're new to a lane or want to cross-check your rates against the market.
-            </div>
-            <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gMaEW22RcWm9GU1CV5EY01" target="_blank" rel="noopener">
-              Get Pro
-            </a>
+            <div class="plan-note">Perfect if you're new to a lane or want to cross-check your rates against the market.</div>
+            <a class="plan-cta" data-stripe href="https://buy.stripe.com/4gMaEW22RcWm9GU1CV5EY01" target="_blank" rel="noopener">Get Pro</a>
           </div>
         </div>
 
-        <button class="skip-link" data-go="6">Skip for now →</button>
+        <button class="skip-link" data-go="7">I already have a key — activate now →</button>
       </div>
     </section>
 
-    <!-- ─── Screen 6 — Pin it ──────────────────────────────────────── -->
-    <section class="screen" id="screen6">
-      <button class="back-link" data-go="5">← Back</button>
+    <!-- ════════════════ SCREEN 7 · ACTIVATE ════════════════ -->
+    <section class="screen" id="screen7">
+      <button class="back-link" data-go="6">← Back</button>
       <div class="inner">
         <div class="brand-row">
-          <span class="brand-mark-sm">L</span>
+          <span class="brand-mark-sm">IQ</span>
           <span class="brand-name-sm">LaneIQ</span>
         </div>
 
-        <h2 class="title">One Last <span class="accent">Step</span></h2>
-        <p class="sub">Pin LaneIQ to your Chrome toolbar so it's one click away on every DAT page.</p>
+        <h2 class="title">Activate your <span class="accent">subscription</span></h2>
+        <p class="sub">You're all set up. Enter your activation key to unlock LaneIQ on every DAT load.</p>
 
-        <div class="pin-card">
-          <ol class="pin-steps">
-            <li class="pin-step">
-              <span class="pin-num">1</span>
-              <div>
-                <div class="pin-title">Click the puzzle piece icon in the top-right of Chrome</div>
-                <div class="pin-detail">It's next to your profile picture, near the address bar.</div>
-              </div>
-            </li>
-            <li class="pin-step">
-              <span class="pin-num">2</span>
-              <div>
-                <div class="pin-title">Find <span class="chip">LaneIQ</span> in the dropdown</div>
-                <div class="pin-detail">All your installed extensions show up here.</div>
-              </div>
-            </li>
-            <li class="pin-step">
-              <span class="pin-num">3</span>
-              <div>
-                <div class="pin-title">Click the pin icon next to it</div>
-                <div class="pin-detail">The pin turns orange when LaneIQ is pinned — that's it!</div>
-              </div>
-            </li>
-          </ol>
-
-          <div class="visual">
-            <div class="browser-frame">
-              <div class="browser-bar">
-                <span class="dot r"></span>
-                <span class="dot y"></span>
-                <span class="dot g"></span>
-                <span class="browser-spacer"></span>
-                <div class="browser-icons">
-                  <span class="puzzle-highlight" aria-hidden="true">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5f6368" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.98.98 0 0 1-.276.837l-1.61 1.61a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.23 8.77c.24-.24.581-.353.917-.303.515.077.877.528 1.073 1.01a2.5 2.5 0 1 0 3.259-3.259c-.482-.196-.933-.558-1.01-1.073-.05-.336.062-.676.303-.917l1.525-1.525A2.402 2.402 0 0 1 12 1.998c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.967 1.02Z"/>
-                    </svg>
-                  </span>
-                  <span style="width:22px; height:22px; border-radius:50%; background:linear-gradient(135deg,#7c4dff,#536dfe);"></span>
-                </div>
-              </div>
-              <div class="browser-body">
-                <div class="ext-row">
-                  <span class="ext-mini">L</span>
-                  <span class="ext-name">LaneIQ</span>
-                  <span class="pin-btn">
-                    <span>📌</span> Pin
-                  </span>
-                </div>
-                <div class="ext-row" style="opacity:.45;background:#fafafa;border-color:var(--line);">
-                  <span class="ext-mini" style="background:#bbb;">A</span>
-                  <span class="ext-name" style="color:var(--ink-soft);">Another extension</span>
-                  <span style="font-size:12.5px;color:var(--ink-soft);">Pin</span>
-                </div>
-              </div>
-            </div>
+        <div class="act-card">
+          <div class="act-brand">
+            <span class="brand-mark-sm">IQ</span>
+            <span class="name">LaneIQ</span>
           </div>
+          <p class="act-tagline">Historical lane intelligence<br>for DAT dispatchers</p>
+
+          <div class="act-mailnote">✉ Please check your email for the activation key</div>
+
+          <input class="act-input" id="act-input" type="text"
+                 placeholder="LANEIQ-XXXX-XXXX-XXXX"
+                 aria-label="Activation key"
+                 spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="characters">
+          <p class="act-error" id="act-error"></p>
+          <button class="act-btn" id="activate-btn" type="button">Activate</button>
+
+          <div class="act-divider"></div>
+
+          <p class="act-noticed">Don't have a key yet?</p>
+          <a class="act-license" href="https://laneiq.org" target="_blank" rel="noopener">Get your license at laneiq.org →</a>
+          <p class="act-plans">Solo · Pro · Plans from $19/month</p>
         </div>
 
-        <div class="cta">
-          <button class="btn" id="go-btn">
-            Let's Go!
-            <span class="arrow">→</span>
-          </button>
+        <div class="cta" style="margin-top:28px;">
+          <button class="btn" id="go-btn">Open DAT load board <span class="arrow">→</span></button>
           <div class="footer-note">Opens the DAT load board in a new tab</div>
         </div>
       </div>
     </section>
 
-  </div>
+  </div><!-- /.deck -->
 
   <!-- Page indicator dots -->
   <div class="dots" aria-hidden="true">
@@ -1560,6 +1200,7 @@ This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Pleas
     <span class="pdot"        data-dot="4"></span>
     <span class="pdot"        data-dot="5"></span>
     <span class="pdot"        data-dot="6"></span>
+    <span class="pdot"        data-dot="7"></span>
   </div>
 
   <script src="welcome.js"></script>
