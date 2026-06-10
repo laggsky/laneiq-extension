@@ -176,6 +176,7 @@
   let dlmMpg        = 6.5;  // saved MPG (persists across sessions)
   let dlmFuelPrice  = 3.89; // saved fuel price
   let dlmDriverRate = 0;    // saved driver pay $/mi
+  let dlmTargetRpm  = 0;    // saved target rate $/mi (0/empty = feature off)
 
   // In-memory cache for Railway /validate — skips the fetch if a successful
   // validation happened within the last 60s in this page session. Resets
@@ -3507,7 +3508,7 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider','routePopped','routeWindowId','routeCommand','routeClosed']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','dlmTargetRpm','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider','routePopped','routeWindowId','routeCommand','routeClosed']);
 
     if (Number.isFinite(s.dlmRadiusOriginMi)) _radiusOriginMi = s.dlmRadiusOriginMi;
     if (Number.isFinite(s.dlmRadiusDestMi))   _radiusDestMi   = s.dlmRadiusDestMi;
@@ -3611,6 +3612,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     dlmMpg         = +s.dlmMpg         || 6.5;
     dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
     dlmDriverRate  = +s.dlmDriverRate  || 0;
+    dlmTargetRpm   = +s.dlmTargetRpm   || 0;
     lovedLoads          = s.lovedLoads      || {};
     gmailEmail          = s.gmailEmail      || '';
     outlookEmail        = s.outlookEmail    || '';
@@ -3684,6 +3686,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if ('dlmMpg' in changes)        dlmMpg        = +changes.dlmMpg.newValue        || 6.5;
         if ('dlmFuelPrice' in changes)  dlmFuelPrice  = +changes.dlmFuelPrice.newValue  || 3.89;
         if ('dlmDriverRate' in changes) dlmDriverRate = +changes.dlmDriverRate.newValue || 0;
+        if ('dlmTargetRpm' in changes)  dlmTargetRpm  = +changes.dlmTargetRpm.newValue  || 0;
         if ('signature' in changes)   signature   = changes.signature.newValue   || '';
         if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
         if ('emailTemplate' in changes)    emailTemplate    = changes.emailTemplate.newValue    || emailTemplate;
@@ -3974,7 +3977,247 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       wrapper.appendChild(mapsBtn);
     }
 
+    // ── Target-rate box: RPM-with-deadhead vs the user's target ─────────────
+    // Built standalone, then injected at the TOP of DAT's Rate panel (see
+    // injectRateBoxInNode), falling back to the View Route wrapper. id^="dlm-"
+    // so it's skipped by every [id^="dlm-"] guard (observer, expand, intercept).
+    // Holds an EDITABLE Rate (pre-filled from getDetailRate, but the user can
+    // type a phone rate) and an EDITABLE Target $/mi (persisted to dlmTargetRpm).
+    // Inputs are built ONCE; only the result sub-area repaints, so focus/typing
+    // survives. Reuses getDetailCities / milesFromChip + the background routeCache
+    // (no new cache); deadhead is synchronous + free.
+    // refEl = any element inside the open detail — used only to read load data
+    // (getDetailRate / getDetailCities / milesFromChip all walk UP to the row),
+    // so a Rate-panel anchor works identically to the old View Route button.
+    function buildTargetBox(refEl) {
+      const tgtBox = document.createElement('div');
+      tgtBox.id = 'dlm-target-box';
+      // Full-tint look (no white card border/shadow); the whole surface colors
+      // green/red/neutral per state.
+      tgtBox.style.cssText =
+        'width:176px;min-width:176px;max-width:176px;box-sizing:border-box;' +
+        'border-radius:10px;padding:9px 11px;background:#f5f5f7;border-left:5px solid #c7c7cc;' +
+        'font-family:-apple-system,"SF Pro Text",BlinkMacSystemFont,system-ui,sans-serif;display:block;';
+
+      const TIN = 'width:62px;border:1px solid #d8d8dd;border-radius:6px;padding:3px 6px;' +
+        'font-size:12px;font-family:inherit;color:#1d1d1f;background:#fff;outline:none;' +
+        'box-sizing:border-box;text-align:right';
+      const ROW = 'display:flex;align-items:center;justify-content:space-between;margin-top:6px';
+      const RLBL = 'font-size:11px;color:#6e6e73;font-weight:600';
+      const postedRate = getDetailRate(refEl);
+      tgtBox.innerHTML =
+        '<div style="font-size:10px;font-weight:700;letter-spacing:.04em;color:#aeaeb2;text-transform:uppercase">Target Rate</div>' +
+        `<div style="${ROW}"><span style="${RLBL}">Rate</span>` +
+          '<span style="display:flex;align-items:center;gap:2px">' +
+            '<span style="font-size:11px;color:#8e8e93">$</span>' +
+            `<input data-dlm-tgt="rate" type="number" min="0" step="0.01" inputmode="decimal" ` +
+              `value="${postedRate > 0 ? postedRate : ''}" placeholder="0.00" style="${TIN}"></span></div>` +
+        `<div style="${ROW}"><span style="${RLBL}">Target</span>` +
+          '<span style="display:flex;align-items:center;gap:2px">' +
+            '<span style="font-size:11px;color:#8e8e93">$</span>' +
+            `<input data-dlm-tgt="target" type="number" min="0" step="0.01" inputmode="decimal" ` +
+              `value="${dlmTargetRpm > 0 ? dlmTargetRpm : ''}" placeholder="0.00" style="${TIN}"></span></div>` +
+        '<div style="height:1px;background:rgba(0,0,0,.07);margin:9px 0 8px"></div>' +
+        '<div data-dlm-tgt="result"></div>';
+
+      const rateInput   = tgtBox.querySelector('[data-dlm-tgt="rate"]');
+      const targetInput = tgtBox.querySelector('[data-dlm-tgt="target"]');
+      const resultEl    = tgtBox.querySelector('[data-dlm-tgt="result"]');
+
+      // routeCache key matches background.js getRoute (origin|dest, lowercased).
+      const laneKey = (o, d) => `${String(o).trim().toLowerCase()}|${String(d).trim().toLowerCase()}`;
+
+      // Cache HIT → cached miles instantly (free, no network). Miss → null.
+      async function cachedMiles(o, d) {
+        if (!o || !d) return null;
+        try {
+          const rc = (await chrome.storage.local.get('routeCache')).routeCache;
+          const e = rc && rc[laneKey(o, d)];
+          if (e && e.miles != null) { const m = parseFloat(e.miles); return m > 0 ? m : null; }
+        } catch (_) { /* cache read failed — treat as miss */ }
+        return null;
+      }
+
+      // Cache MISS → one getRoute (background fetches via proxy + writes routeCache).
+      async function fetchMiles(o, d) {
+        if (!o || !d) return null;
+        try {
+          const resp = await chrome.runtime.sendMessage(
+            { type: 'getRoute', origin: o, dest: d, apiKey: mapsApiKey }
+          );
+          if (resp && !resp.error && resp.miles != null) {
+            const m = parseFloat(resp.miles); return m > 0 ? m : null;
+          }
+        } catch (_) { /* messaging failed — leave totalMiles unresolved */ }
+        return null;
+      }
+
+      // totalMiles (trip + deadhead) is resolved ONCE per load; the rate/target
+      // inputs then recompute against it synchronously as the user types.
+      // _tripMiles / _dh are kept so the result area can show the mileage basis.
+      let _totalMiles = null;
+      let _tripMiles  = null;
+      let _dh         = 0;
+      let _milesState = 'loading'; // 'loading' | 'ready' | 'unavailable'
+      const fmt = n => `$${n.toFixed(2)}/mi`;
+
+      // Mileage basis line, e.g. "1662 + 95 DH = 1757 mi". When DH is 0/unknown,
+      // just the trip total: "1662 mi".
+      function milesBreakdown() {
+        const trip = Math.round(_tripMiles || 0);
+        const dh   = Math.round(_dh || 0);
+        const tot  = Math.round(_totalMiles || 0);
+        return dh > 0 ? `${trip} + ${dh} DH = ${tot} mi` : `${tot} mi`;
+      }
+
+      function setNeutral(msg) {
+        tgtBox.style.background = '#f5f5f7';
+        tgtBox.style.borderLeft = '5px solid #c7c7cc';
+        resultEl.innerHTML = `<div style="font-size:13px;font-weight:700;color:#8e8e93">${msg}</div>`;
+      }
+
+      // Pure render from the live inputs + resolved totalMiles. Never rebuilds the
+      // inputs, so typing/focus is preserved.
+      function compute() {
+        const rate   = parseFloat(rateInput.value)   || 0;
+        const target = parseFloat(targetInput.value) || 0;
+        // Blank/0 rate → neutral (no false negotiate number). Same for no target.
+        if (!rate || rate <= 0)     { setNeutral('Enter a rate'); return; }
+        if (!target || target <= 0) { setNeutral('Set a target'); return; }
+        if (_milesState === 'loading')     { setNeutral('Loading miles…');   return; }
+        if (_milesState === 'unavailable' || !_totalMiles || _totalMiles <= 0) {
+          setNeutral('Miles unavailable'); return;
+        }
+        const actualRpm = rate / _totalMiles;            // RPM INCLUDING deadhead
+        if (actualRpm >= target) {
+          tgtBox.style.background = '#eafaf0';
+          tgtBox.style.borderLeft = '5px solid #34c759';
+          resultEl.innerHTML =
+            '<div style="font-size:10px;font-weight:700;letter-spacing:.04em;color:#1f8f4a;text-transform:uppercase">On Target</div>' +
+            `<div style="font-size:16px;font-weight:800;color:#1d7a3e;margin-top:2px">${fmt(actualRpm)}</div>` +
+            `<div style="font-size:10px;color:#5a9c72;margin-top:1px">${milesBreakdown()}</div>`;
+        } else {
+          const gap = Math.round((target - actualRpm) * _totalMiles);
+          tgtBox.style.background = '#fff0ef';
+          tgtBox.style.borderLeft = '5px solid #ff3b30';
+          resultEl.innerHTML =
+            '<div style="font-size:10px;font-weight:700;letter-spacing:.04em;color:#c4271d;text-transform:uppercase">Below Target</div>' +
+            `<div style="font-size:16px;font-weight:800;color:#c4271d;margin-top:2px">Negotiate +$${gap.toLocaleString()}</div>` +
+            `<div style="font-size:10px;color:#a05049;margin-top:2px">Target ${fmt(target)} · Now ${fmt(actualRpm)}</div>` +
+            `<div style="font-size:10px;color:#a05049">${milesBreakdown()}</div>`;
+        }
+      }
+
+      async function resolveMiles() {
+        const dh = parseFloat(milesFromChip(refEl)) || 0;   // deadhead, synchronous + free
+        _dh = dh;
+        const { origin, dest } = getDetailCities(refEl);
+        let tripMiles = await cachedMiles(origin, dest);  // instant on HIT
+        if (tripMiles == null) {                          // MISS → loading, then fetch
+          _milesState = 'loading'; compute();
+          tripMiles = await fetchMiles(origin, dest);
+        }
+        if (tripMiles == null || tripMiles <= 0) { _milesState = 'unavailable'; _tripMiles = null; _totalMiles = null; }
+        else { _milesState = 'ready'; _tripMiles = tripMiles; _totalMiles = tripMiles + dh; }
+        compute();
+      }
+
+      // Rate edits recompute only. Target edits recompute AND persist to
+      // dlmTargetRpm (sticks across loads/sessions; mirrors the existing pattern).
+      rateInput.addEventListener('input', compute);
+      targetInput.addEventListener('input', () => {
+        const v = parseFloat(targetInput.value) || 0;
+        dlmTargetRpm = v;
+        chrome.storage.local.set({ dlmTargetRpm: v });
+        compute();
+      });
+
+      // Keep this box's target in sync if it's changed elsewhere (another open
+      // detail / route window). Don't fight the typist — skip if focused.
+      // Self-removing once the detail panel (and box) is gone.
+      function onTgtChange(changes, area) {
+        if (area !== 'local') return;
+        if (!tgtBox.isConnected) { chrome.storage.onChanged.removeListener(onTgtChange); return; }
+        if ('dlmTargetRpm' in changes) {
+          dlmTargetRpm = +changes.dlmTargetRpm.newValue || 0;
+          if (document.activeElement !== targetInput) {
+            targetInput.value = dlmTargetRpm > 0 ? dlmTargetRpm : '';
+            compute();
+          }
+        }
+      }
+      chrome.storage.onChanged.addListener(onTgtChange);
+
+      compute();        // initial paint (likely "Loading miles…")
+      resolveMiles();   // resolve trip+deadhead, then recompute
+      return tgtBox;
+    }
+
+    // ── Rate-panel anchor (text/label based — DAT renames hashed classes) ─────
+    // Find the most specific label first ("Rate / mile" / "Rate per mile"), then
+    // a bare "Rate". Leaf-ish elements only (short text) so we never match a whole
+    // panel's concatenated text.
+    function findRateMileAnchor(root) {
+      const els = root.querySelectorAll('div,span,td,th,p,label,strong,b');
+      let rpmLabel = null, rateLabel = null;
+      for (const e of els) {
+        const t = (e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (!t || t.length > 18) continue;
+        if (/^rate\s*\/?\s*(per\s+)?mi(le)?$/.test(t) || t === '$/mi' || t === 'rpm') {
+          if (!rpmLabel) rpmLabel = e;
+        } else if (t === 'rate' && !rateLabel) {
+          rateLabel = e;
+        }
+      }
+      return rpmLabel || rateLabel || null;
+    }
+
+    // Inject the box at the TOP of DAT's Rate panel. Returns true once a box is
+    // present (so retries stop). Idempotent — dedups on the existing #dlm-target-box.
+    function injectRateBox(root) {
+      if (!root || !root.isConnected) return false;
+      if (root.querySelector('#dlm-target-box')) return true; // already injected
+      const anchor = findRateMileAnchor(root);
+      if (!anchor) return false;
+      // Walk up to the rate panel: nearest ancestor that also holds the sibling
+      // labels (Trip + Total). Bounded so we never escape the detail container.
+      let panel = anchor;
+      for (let i = 0; i < 6 && panel.parentElement && panel !== root; i++) {
+        const t = (panel.textContent || '').toLowerCase();
+        if (t.includes('trip') && t.includes('total')) break;
+        panel = panel.parentElement;
+      }
+      const box = buildTargetBox(anchor);
+      box.style.marginBottom = '10px';
+      // Top of the rate panel; fall back to directly above the rate/mile label.
+      if (panel && panel !== anchor && panel.firstChild) {
+        panel.insertBefore(box, panel.firstChild);
+      } else if (anchor.parentElement) {
+        anchor.parentElement.insertBefore(box, anchor);
+      } else {
+        return false;
+      }
+      return true;
+    }
+
+    // Bounded retry — the Rate panel can render a beat after the detail container.
+    // ~50ms × 20 ≈ 1s. If the rate anchor never appears, fall back to the View
+    // Route wrapper (the original location) so the box still shows reliably.
+    function injectRateBoxInNode(root, attempt = 0) {
+      if (!root || !root.isConnected) return;
+      if (injectRateBox(root)) return;
+      if (attempt < 20) { setTimeout(() => injectRateBoxInNode(root, attempt + 1), 50); return; }
+      if (root.querySelector('#dlm-target-box')) return;
+      const vr = [...root.querySelectorAll('button,a,[role="button"]')]
+        .find(b => b.dataset && b.dataset.dlmRouteOk);
+      if (vr && vr.parentElement) vr.parentElement.appendChild(buildTargetBox(vr));
+    }
+
     document.querySelectorAll('button,a,[role="button"]').forEach(tryIntercept);
+    // A detail panel already open at script load → inject now (the observer only
+    // fires for freshly inserted detail containers).
+    document.querySelectorAll('[class*="details-container"],[class*="dat-load-details"]')
+      .forEach(n => injectRateBoxInNode(n));
 
     // Collect newly added nodes that contain email addresses across debounce ticks
     const _pendingEmail = new Set();
@@ -4175,6 +4418,9 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
             // A+B: inject route buttons into this detail panel now (with a short
             // bounded retry) rather than waiting on the global 250ms rescan below.
             interceptInNode(node);
+            // Inject the target-rate box at the TOP of the Rate panel (text-anchored,
+            // bounded retry, falls back to the View Route wrapper).
+            injectRateBoxInNode(node);
           }
         }
 
