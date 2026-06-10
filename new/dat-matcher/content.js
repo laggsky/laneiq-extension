@@ -1444,9 +1444,9 @@ if (so && ro && so !== ro) return false;
           <div style="width:48px;height:48px;margin:0 auto 12px;border-radius:12px;background:#0058e0;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,88,224,.25)">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
           </div>
-          <div style="font-size:15px;font-weight:700;color:#1d1d1f">Drop your CSV here</div>
-          <div style="font-size:11px;color:#aeaeb2;margin-top:4px">or click to choose · everything stays on your device</div>
-          <input id="dlm-setup-file-input" type="file" accept=".csv,.txt,.tsv" multiple style="display:none">
+          <div style="font-size:15px;font-weight:700;color:#1d1d1f">Drop your CSV or Excel file here</div>
+          <div style="font-size:11px;color:#aeaeb2;margin-top:4px">CSV or Excel (.xlsx / .xls) · click to choose · everything stays on your device</div>
+          <input id="dlm-setup-file-input" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls" multiple style="display:none">
         </div>
         <div id="dlm-messy-panel" style="margin-top:10px"></div>
       </div>
@@ -1750,16 +1750,73 @@ if (so && ro && so !== ro) return false;
     return rows;
   }
 
-  async function openMessyFile(file, bodyEl) {
-    let text = '';
-    try { text = await file.text(); } catch (_) { return; }
-    const matrix = parseMessyMatrix(text);
-    const panel = bodyEl.querySelector('#dlm-messy-panel');
-    if (!matrix.length) {
-      _messy = null;
-      if (panel) panel.innerHTML = '<div style="font-size:11px;color:#ff3b30;font-weight:600">Could not read any rows from that file.</div>';
-      return;
+  // Normalize a raw array-of-arrays (e.g. from SheetJS sheet_to_json header:1)
+  // into the SAME rectangular, blank-row-stripped, trimmed-string matrix that
+  // parseMessyMatrix produces for CSV — so the column mapper, header guessing,
+  // ignore/swap, dup detection and import path consume Excel and CSV identically.
+  function normalizeMatrix(aoa) {
+    const cleaned = (aoa || [])
+      .map(r => Array.isArray(r) ? r : [r])
+      .filter(r => r.some(c => String(c == null ? '' : c).trim() !== ''));
+    const maxCols = cleaned.reduce((m, r) => Math.max(m, r.length), 0);
+    return cleaned.map(r => {
+      const c = r.slice();
+      while (c.length < maxCols) c.push('');
+      return c.map(x => String(x == null ? '' : x).trim());
+    });
+  }
+
+  // Parse an Excel workbook (.xlsx/.xls) FIRST SHEET into the messy matrix.
+  // First sheet only (v1) — no sheet picker. Returns { matrix } on success or
+  // { error } with a friendly message (missing lib / unparseable / empty book /
+  // empty first sheet) so the caller never feeds the mapper garbage.
+  async function parseExcelMatrix(file) {
+    if (typeof XLSX === 'undefined' || !XLSX.read) {
+      return { error: 'Could not read any rows from that file.' };
     }
+    let wb;
+    try {
+      const buf = await file.arrayBuffer();
+      wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+    } catch (_) {
+      return { error: 'Could not read any rows from that file.' };
+    }
+    if (!wb || !wb.SheetNames || !wb.SheetNames.length) {
+      return { error: 'No data found in that spreadsheet.' };
+    }
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    if (!sheet) return { error: 'No data found in that spreadsheet.' };
+    // header:1 → array-of-arrays; raw:false → formatted text (numbers/dates as
+    // shown); defval:'' → no missing cells. Matches the CSV cell contract.
+    const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+    const matrix = normalizeMatrix(aoa);
+    if (!matrix.length) return { error: 'No data found in that spreadsheet.' };
+    return { matrix };
+  }
+
+  async function openMessyFile(file, bodyEl) {
+    const panel = bodyEl.querySelector('#dlm-messy-panel');
+    const showErr = msg => {
+      _messy = null;
+      if (panel) panel.innerHTML =
+        `<div style="font-size:11px;color:#ff3b30;font-weight:600">${esc(msg)}</div>`;
+    };
+    // Detect Excel by extension; everything else stays on the CSV/text path.
+    const isExcel = /\.(xlsx|xls)$/i.test(file.name || '');
+
+    let matrix;
+    if (isExcel) {
+      const res = await parseExcelMatrix(file);
+      if (res.error) { showErr(res.error); return; }
+      matrix = res.matrix;
+    } else {
+      let text = '';
+      try { text = await file.text(); }
+      catch (_) { showErr('Could not read any rows from that file.'); return; }
+      matrix = parseMessyMatrix(text);
+    }
+    if (!matrix.length) { showErr('Could not read any rows from that file.'); return; }
+
     _messy = { fileName: file.name || 'mapped.csv', matrix, hasHeader: looksLikeHeader(matrix[0]), headerRow: 1, mapping: [] };
     messyRecomputeGuess();
     renderMessyPanel(bodyEl);
