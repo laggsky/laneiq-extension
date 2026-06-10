@@ -43,6 +43,27 @@
   let _lastPanelCtx = null; // { mode:'single'|'dual', o, d, b, node } — for edit/delete re-render
   let _regionsTimer = null;
   let _trendsOpening = false;   // in-flight guard: one Trendlines tab per click (survives the 1s regions re-render)
+
+  // Open DAT's live Trendlines page in EXACTLY ONE new tab. Shared by every
+  // "Check Today's Market Trends" button (Market tab + target-rate box) so the
+  // one-tab logic lives in ONE place and can't diverge. Link-out only — nothing
+  // is fetched, scraped, parsed, cached, or rendered from that page.
+  //   • _trendsOpening (module-scoped) guards against double-fire — and because
+  //     it's shared, having the button in BOTH places still yields one tab.
+  //   • window.open is called WITHOUT 'noopener' so its return is reliable (with
+  //     'noopener' it returns null even on success, which would also fire the
+  //     fallback → a second tab). The opener is severed manually instead.
+  //   • The background fallback fires ONLY when window.open returns null/undefined
+  //     (popup blocked) — never alongside a successful open.
+  function openTrendsTab() {
+    if (_trendsOpening) return;
+    _trendsOpening = true;
+    setTimeout(() => { _trendsOpening = false; }, 1500);
+    let w = null;
+    try { w = window.open('https://www.dat.com/trendlines', '_blank'); } catch (_) { w = null; }
+    if (w) { try { w.opener = null; } catch (_) {} }            // sever opener (we dropped 'noopener')
+    else { chrome.runtime.sendMessage({ type: 'openTrends' }); } // genuinely blocked → background fallback
+  }
   let emailTemplates      = [];
   let activeTemplateIndex = 0;
   let gmailEmail          = '';
@@ -2046,27 +2067,11 @@ if (so && ro && so !== ro) return false;
         ${rows}
       </div>`;
 
-    // Opens DAT's live Trendlines page in a NEW TAB. Nothing is fetched, scraped,
-    // parsed, cached, or rendered from that page — the button only navigates a new
-    // tab. The body is rebuilt every render (1s regions timer), so this listener
-    // is attached to a FRESH button node each time (old nodes + listeners die with
-    // the old innerHTML — no stacking). Guarantees EXACTLY ONE tab per click:
-    //   • _trendsOpening in-flight guard → a click can't fire the open twice.
-    //   • window.open is called WITHOUT 'noopener' so its return value is reliable
-    //     (with 'noopener' it returns null even on success, which previously made
-    //     the fallback fire too → a second tab). We sever the opener manually.
-    //   • The background fallback fires ONLY when window.open genuinely returns
-    //     null/undefined (popup blocked) — never alongside a successful open.
+    // The body is rebuilt every render (1s regions timer), so this listener is
+    // attached to a FRESH button node each time (old nodes + listeners die with
+    // the old innerHTML — no stacking). One tab per click via openTrendsTab().
     const tBtn = bodyEl.querySelector('#dlm-trends-btn');
-    if (tBtn) tBtn.addEventListener('click', () => {
-      if (_trendsOpening) return;
-      _trendsOpening = true;
-      setTimeout(() => { _trendsOpening = false; }, 1500);
-      let w = null;
-      try { w = window.open('https://www.dat.com/trendlines', '_blank'); } catch (_) { w = null; }
-      if (w) { try { w.opener = null; } catch (_) {} }          // sever opener (we dropped 'noopener')
-      else { chrome.runtime.sendMessage({ type: 'openTrends' }); } // genuinely blocked → background fallback
-    });
+    if (tBtn) tBtn.addEventListener('click', openTrendsTab);
   }
 
   function paintSliderFill(slider) {
@@ -4129,11 +4134,28 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
             `<input data-dlm-tgt="target" type="number" min="0" step="0.01" inputmode="decimal" ` +
               `value="${dlmTargetRpm > 0 ? dlmTargetRpm : ''}" placeholder="0.00" style="${TIN}"></span></div>` +
         '<div style="height:1px;background:rgba(0,0,0,.07);margin:9px 0 8px"></div>' +
-        '<div data-dlm-tgt="result"></div>';
+        '<div data-dlm-tgt="result"></div>' +
+        // Compact link-out to DAT's live Trendlines page — under the rate/target
+        // area, sized to fit the 176px box. Static pill (simple border + hover,
+        // no animation). Link-out only (no fetch/scrape).
+        '<button data-dlm-tgt="trends" ' +
+          'style="display:flex;align-items:center;justify-content:center;gap:4px;width:100%;margin-top:9px;padding:5px 8px;' +
+          'background:rgba(255,255,255,.65);color:#0058e0;border:1px solid #0058e0;border-radius:7px;' +
+          'font-size:10px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.01em;box-sizing:border-box;transition:background .15s" ' +
+          'onmouseover="this.style.background=\'#f0f5ff\'" onmouseout="this.style.background=\'rgba(255,255,255,.65)\'">' +
+          '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" style="flex-shrink:0">' +
+            '<path d="M2 11l3.5-3.5L8 10l5.5-6" stroke="#0058e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+            '<path d="M10.5 4.5H14V8" stroke="#0058e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+          '</svg>Market Trends</button>';
 
       const rateInput   = tgtBox.querySelector('[data-dlm-tgt="rate"]');
       const targetInput = tgtBox.querySelector('[data-dlm-tgt="target"]');
       const resultEl    = tgtBox.querySelector('[data-dlm-tgt="result"]');
+      // Same shared one-tab open logic as the Market-tab button. Attached once
+      // (the box is built once per detail open; only the result sub-area repaints,
+      // so this button + listener persist untouched).
+      const trendsBtn   = tgtBox.querySelector('[data-dlm-tgt="trends"]');
+      if (trendsBtn) trendsBtn.addEventListener('click', openTrendsTab);
 
       // routeCache key matches background.js getRoute (origin|dest, lowercased).
       const laneKey = (o, d) => `${String(o).trim().toLowerCase()}|${String(d).trim().toLowerCase()}`;
