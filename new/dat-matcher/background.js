@@ -54,6 +54,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
 
+  // Fallback for the Market tab's "Check Today's Market Trends" button when the
+  // DAT page blocks window.open. Fixed URL (no arbitrary-URL param) — opens DAT's
+  // live Trendlines page in a new tab. No data is fetched or stored here.
+  if (msg.type === 'openTrends') {
+    chrome.tabs.create({ url: 'https://www.dat.com/trendlines' });
+    return false;
+  }
+
   if (msg.type === 'openPanel') {
     chrome.windows.create({
       url:    chrome.runtime.getURL('panel.html'),

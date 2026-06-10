@@ -42,6 +42,7 @@
   const _sigToken   = {};   // _recSig(record) → STABLE token, so the SAME record gets the SAME token in every section it renders in (exact-match + radius), letting delete remove all its nodes at once
   let _lastPanelCtx = null; // { mode:'single'|'dual', o, d, b, node } — for edit/delete re-render
   let _regionsTimer = null;
+  let _trendsOpening = false;   // in-flight guard: one Trendlines tab per click (survives the 1s regions re-render)
   let emailTemplates      = [];
   let activeTemplateIndex = 0;
   let gmailEmail          = '';
@@ -2030,10 +2031,42 @@ if (so && ro && so !== ro) return false;
         </svg>
         View DAT Market Conditions
       </a>
+      <button id="dlm-trends-btn"
+        style="display:flex;align-items:center;justify-content:center;gap:6px;margin:0 12px 12px;padding:10px 14px;width:calc(100% - 24px);background:#fff;color:#0058e0;border:1.5px solid #0058e0;border-radius:10px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer;letter-spacing:.01em;box-sizing:border-box;transition:background .15s"
+        onmouseover="this.style.background='#f0f5ff'"
+        onmouseout="this.style.background='#fff'">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none" style="flex-shrink:0">
+          <path d="M2 11l3.5-3.5L8 10l5.5-6" stroke="#0058e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M10.5 4.5H14V8" stroke="#0058e0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Check Today's Market Trends
+      </button>
       <div style="padding:0 12px">
         <div class="dlm-stitle" style="margin-bottom:6px">Top Origins on Screen${top.length ? ' · ' + top.length : ''}</div>
         ${rows}
       </div>`;
+
+    // Opens DAT's live Trendlines page in a NEW TAB. Nothing is fetched, scraped,
+    // parsed, cached, or rendered from that page — the button only navigates a new
+    // tab. The body is rebuilt every render (1s regions timer), so this listener
+    // is attached to a FRESH button node each time (old nodes + listeners die with
+    // the old innerHTML — no stacking). Guarantees EXACTLY ONE tab per click:
+    //   • _trendsOpening in-flight guard → a click can't fire the open twice.
+    //   • window.open is called WITHOUT 'noopener' so its return value is reliable
+    //     (with 'noopener' it returns null even on success, which previously made
+    //     the fallback fire too → a second tab). We sever the opener manually.
+    //   • The background fallback fires ONLY when window.open genuinely returns
+    //     null/undefined (popup blocked) — never alongside a successful open.
+    const tBtn = bodyEl.querySelector('#dlm-trends-btn');
+    if (tBtn) tBtn.addEventListener('click', () => {
+      if (_trendsOpening) return;
+      _trendsOpening = true;
+      setTimeout(() => { _trendsOpening = false; }, 1500);
+      let w = null;
+      try { w = window.open('https://www.dat.com/trendlines', '_blank'); } catch (_) { w = null; }
+      if (w) { try { w.opener = null; } catch (_) {} }          // sever opener (we dropped 'noopener')
+      else { chrome.runtime.sendMessage({ type: 'openTrends' }); } // genuinely blocked → background fallback
+    });
   }
 
   function paintSliderFill(slider) {
@@ -2048,7 +2081,7 @@ if (so && ro && so !== ro) return false;
     document.querySelectorAll('#dlm-panel .dlm-tab').forEach(t =>
       t.classList.toggle('dlm-tab-active', t.dataset.tab === name)
     );
-    const _tabLabels = { history: 'Load History', loved: 'Preferred', regions: 'Hot Regions', templates: 'Templates', setup: 'Setup', notes: 'Notes' };
+    const _tabLabels = { history: 'Load History', loved: 'Preferred', regions: 'Market', templates: 'Templates', setup: 'Setup', notes: 'Notes' };
     const titleEl = document.getElementById('dlm-title');
     if (titleEl && name !== 'history') titleEl.innerHTML = '◈ ' + (_tabLabels[name] || name) + '<small> · drag to move</small>';
     if (titleEl && name === 'history') titleEl.innerHTML = '◈ Load History<small> · drag to move</small>';
@@ -2228,7 +2261,7 @@ if (so && ro && so !== ro) return false;
         <div id="dlm-sidebar">
           <button class="dlm-tab dlm-tab-active" data-tab="history">Load History</button>
           <button class="dlm-tab" data-tab="loved">Preferred</button>
-          <button class="dlm-tab" data-tab="regions">Hot Regions</button>
+          <button class="dlm-tab" data-tab="regions">Market</button>
           <button class="dlm-tab" data-tab="templates">Templates</button>
           <button class="dlm-tab" data-tab="setup">Setup</button>
           <button class="dlm-tab" data-tab="notes">Notes</button>
