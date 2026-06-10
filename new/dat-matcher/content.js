@@ -4189,9 +4189,12 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       }
       const box = buildTargetBox(anchor);
       box.style.marginBottom = '10px';
-      // Top of the rate panel; fall back to directly above the rate/mile label.
-      if (panel && panel !== anchor && panel.firstChild) {
-        panel.insertBefore(box, panel.firstChild);
+      // Sit ABOVE the entire Rate/Total/Trip/Rate-per-mile block as one unit:
+      // insert the box as the sibling immediately preceding the whole panel
+      // container, so DAT's own label+value rows stay together below it. Fall
+      // back to directly above the rate/mile label if the panel has no parent.
+      if (panel && panel !== anchor && panel.parentNode) {
+        panel.parentNode.insertBefore(box, panel);
       } else if (anchor.parentElement) {
         anchor.parentElement.insertBefore(box, anchor);
       } else {
