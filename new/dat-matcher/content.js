@@ -205,6 +205,8 @@
   let dlmMpg        = 6.5;  // saved MPG (persists across sessions)
   let dlmFuelPrice  = 3.89; // saved fuel price
   let dlmDriverRate = 0;    // saved driver pay $/mi
+  let dlmDriverPercent = 0;          // saved driver pay as % of the posted rate
+  let dlmDriverPayMode = 'permile';  // 'permile' | 'percent' — which driver-pay formula calc() uses
   let dlmTargetRpm  = 0;    // saved target rate $/mi (0/empty = feature off)
 
   // In-memory cache for Railway /validate — skips the fetch if a successful
@@ -3624,7 +3626,7 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','dlmTargetRpm','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider','routePopped','routeWindowId','routeCommand','routeClosed']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','dlmDriverPercent','dlmDriverPayMode','dlmTargetRpm','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider','routePopped','routeWindowId','routeCommand','routeClosed']);
 
     if (Number.isFinite(s.dlmRadiusOriginMi)) _radiusOriginMi = s.dlmRadiusOriginMi;
     if (Number.isFinite(s.dlmRadiusDestMi))   _radiusDestMi   = s.dlmRadiusDestMi;
@@ -3728,6 +3730,8 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     dlmMpg         = +s.dlmMpg         || 6.5;
     dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
     dlmDriverRate  = +s.dlmDriverRate  || 0;
+    dlmDriverPercent = +s.dlmDriverPercent || 0;
+    dlmDriverPayMode = (s.dlmDriverPayMode === 'percent') ? 'percent' : 'permile';
     dlmTargetRpm   = +s.dlmTargetRpm   || 0;
     lovedLoads          = s.lovedLoads      || {};
     gmailEmail          = s.gmailEmail      || '';
@@ -3802,6 +3806,8 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if ('dlmMpg' in changes)        dlmMpg        = +changes.dlmMpg.newValue        || 6.5;
         if ('dlmFuelPrice' in changes)  dlmFuelPrice  = +changes.dlmFuelPrice.newValue  || 3.89;
         if ('dlmDriverRate' in changes) dlmDriverRate = +changes.dlmDriverRate.newValue || 0;
+        if ('dlmDriverPercent' in changes) dlmDriverPercent = +changes.dlmDriverPercent.newValue || 0;
+        if ('dlmDriverPayMode' in changes) dlmDriverPayMode = (changes.dlmDriverPayMode.newValue === 'percent') ? 'percent' : 'permile';
         if ('dlmTargetRpm' in changes)  dlmTargetRpm  = +changes.dlmTargetRpm.newValue  || 0;
         if ('signature' in changes)   signature   = changes.signature.newValue   || '';
         if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
@@ -5170,11 +5176,17 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         </div>
         <div class="dlm-cf-sep"></div>
         <div class="dlm-cf">
-          <span class="dlm-cf-label">Driver $/mi</span>
+          <span class="dlm-cf-label" style="display:flex;flex-direction:column;gap:3px;align-items:flex-start">
+            <span data-dlm="driver-label">Driver $/mi</span>
+            <span class="dlm-driver-toggle" data-dlm="driver-toggle" data-dtg="permile">
+              <button type="button" data-dlm="driver-tg-permile" class="dlm-dtg-on">$/mi</button>
+              <button type="button" data-dlm="driver-tg-percent">%</button>
+            </span>
+          </span>
           <div class="dlm-cf-row">
-            <span class="dlm-cf-pre">$</span>
-            <input class="dlm-cf-input" data-dlm="driver-rpm" type="number" min="0" step="0.01"
-                   value="${dlmDriverRate || ''}" placeholder="0.00">
+            <span class="dlm-cf-pre" data-dlm="driver-pre">$</span>
+            <input class="dlm-cf-input" data-dlm="driver-rpm" type="number" min="0" step="0.01" placeholder="0.00">
+            <span class="dlm-cf-suf" data-dlm="driver-suf" style="display:none">%</span>
           </div>
         </div>
         <div class="dlm-cf dlm-cf-computed">
@@ -5199,19 +5211,25 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     // ── Live calculator (q scoped to THIS pane's mbody, not box) ─────────────
     function q(attr) { return mbody.querySelector(`[data-dlm="${attr}"]`); }
 
+    // Driver pay mode: '$/mi' (totalMiles × rate) OR '%' (posted rate × pct).
+    let driverMode = (dlmDriverPayMode === 'percent') ? 'percent' : 'permile';
+
     function calc() {
-      const rateV      = parseFloat(q('rate')?.value)       || 0;
-      const miles      = parseFloat(q('miles')?.value)      || 0;
-      const mpg        = parseFloat(q('mpg')?.value)        || 0;
-      const fuel       = parseFloat(q('fuel')?.value)       || 0;
-      const dhMiles    = parseFloat(q('dh')?.value)         || 0;
-      const driverRpm  = parseFloat(q('driver-rpm')?.value) || 0;
-      const tolls      = parseFloat(q('tolls')?.value)      || 0;
+      const rateV       = parseFloat(q('rate')?.value)       || 0;
+      const miles       = parseFloat(q('miles')?.value)      || 0;
+      const mpg         = parseFloat(q('mpg')?.value)        || 0;
+      const fuel        = parseFloat(q('fuel')?.value)       || 0;
+      const dhMiles     = parseFloat(q('dh')?.value)         || 0;
+      const driverInput = parseFloat(q('driver-rpm')?.value) || 0;
+      const tolls       = parseFloat(q('tolls')?.value)      || 0;
 
       const totalMiles = miles + dhMiles;
       const rpm        = (rateV && miles) ? rateV / miles                             : null;
       const fuelCost   = (totalMiles && mpg && fuel) ? (totalMiles / mpg) * fuel      : null;
-      const driverCost = (totalMiles && driverRpm)   ? totalMiles * driverRpm         : 0;
+      // '%' → posted rate × (pct/100) (NOT incl. deadhead); '$/mi' → (miles+DH) × rate.
+      const driverCost = driverMode === 'percent'
+        ? (rateV && driverInput ? rateV * (driverInput / 100) : 0)
+        : (totalMiles && driverInput ? totalMiles * driverInput : 0);
       const profit     = rateV ? rateV - (fuelCost || 0) - tolls - driverCost        : null;
 
       q('rpm').textContent        = rpm        ? `$${rpm.toFixed(2)}/mi`                       : '—';
@@ -5222,13 +5240,49 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       pEl.textContent = profit != null ? `$${Math.round(profit).toLocaleString()}` : '—';
       pEl.style.color = profit == null ? '#1d1d1f' : profit >= 0 ? '#34c759' : '#ff3b30';
 
-      // Persist user-entered values
+      // Persist user-entered values. Driver value persists to its OWN key per mode
+      // so switching modes never loses the other value.
       if (mpg       && mpg       !== dlmMpg)        { dlmMpg        = mpg;       chrome.storage.local.set({ dlmMpg: mpg }); }
       if (fuel      && fuel      !== dlmFuelPrice)   { dlmFuelPrice  = fuel;      chrome.storage.local.set({ dlmFuelPrice: fuel }); }
-      if (driverRpm && driverRpm !== dlmDriverRate)  { dlmDriverRate = driverRpm; chrome.storage.local.set({ dlmDriverRate: driverRpm }); }
+      if (driverMode === 'percent') {
+        if (driverInput && driverInput !== dlmDriverPercent) { dlmDriverPercent = driverInput; chrome.storage.local.set({ dlmDriverPercent: driverInput }); }
+      } else {
+        if (driverInput && driverInput !== dlmDriverRate)    { dlmDriverRate    = driverInput; chrome.storage.local.set({ dlmDriverRate: driverInput }); }
+      }
     }
 
+    // Apply a driver-pay mode to the UI: label, $ prefix vs % suffix, active
+    // toggle button, and the input value (each mode keeps its own stored value).
+    function applyDriverMode(mode) {
+      driverMode = (mode === 'percent') ? 'percent' : 'permile';
+      const lbl = q('driver-label'), pre = q('driver-pre'), suf = q('driver-suf'), inp = q('driver-rpm');
+      const tgPm = q('driver-tg-permile'), tgPc = q('driver-tg-percent');
+      if (driverMode === 'percent') {
+        if (lbl) lbl.textContent = 'Driver %';
+        if (pre) pre.style.display = 'none';
+        if (suf) suf.style.display = '';
+        if (inp) { inp.step = '0.5'; inp.value = dlmDriverPercent > 0 ? dlmDriverPercent : ''; }
+      } else {
+        if (lbl) lbl.textContent = 'Driver $/mi';
+        if (pre) pre.style.display = '';
+        if (suf) suf.style.display = 'none';
+        if (inp) { inp.step = '0.01'; inp.value = dlmDriverRate > 0 ? dlmDriverRate : ''; }
+      }
+      if (tgPm) tgPm.classList.toggle('dlm-dtg-on', driverMode === 'permile');
+      if (tgPc) tgPc.classList.toggle('dlm-dtg-on', driverMode === 'percent');
+      q('driver-toggle')?.setAttribute('data-dtg', driverMode);   // slide the thumb
+      calc();
+    }
+    function setDriverMode(mode) {
+      applyDriverMode(mode);
+      dlmDriverPayMode = driverMode;
+      chrome.storage.local.set({ dlmDriverPayMode: driverMode });
+    }
+    q('driver-tg-permile')?.addEventListener('click', () => setDriverMode('permile'));
+    q('driver-tg-percent')?.addEventListener('click', () => setDriverMode('percent'));
+
     ['rate','miles','mpg','fuel','dh','driver-rpm','tolls'].forEach(k => q(k)?.addEventListener('input', calc));
+    applyDriverMode(dlmDriverPayMode);   // paint the saved mode + value, then compute
 
     // ── DH From → auto-fetch DH miles + redraw map ────────────────────────────
     function fetchDHRoute() {
