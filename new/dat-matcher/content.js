@@ -4190,8 +4190,11 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         const dh = parseFloat(milesFromChip(refEl)) || 0;   // deadhead, synchronous + free
         _dh = dh;
         const { origin, dest } = getDetailCities(refEl);
-        let tripMiles = await cachedMiles(origin, dest);  // instant on HIT
-        if (tripMiles == null) {                          // MISS → loading, then fetch
+        let tripMiles = await cachedMiles(origin, dest);  // 1. routeCache HIT — instant/free
+        if (tripMiles == null) {                          // 2. DAT's on-page "Trip … mi" —
+          tripMiles = getDetailTripMiles(refEl);          //    free/instant, no proxy
+        }
+        if (tripMiles == null || tripMiles <= 0) {        // 3. proxy fetch — current behavior
           _milesState = 'loading'; compute();
           tripMiles = await fetchMiles(origin, dest);
         }
@@ -4229,6 +4232,56 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       compute();        // initial paint (likely "Loading miles…")
       resolveMiles();   // resolve trip+deadhead, then recompute
       return tgtBox;
+    }
+
+    // ── DAT on-page trip miles (free/instant fallback — no proxy) ─────────────
+    // Reads DAT's "Trip … mi" from the Rate panel. Walks up from the box's anchor
+    // to the panel exactly like injectRateBox (ancestor holding both "trip" and
+    // "total"), finds the short "Trip" label leaf, then reads the miles from the
+    // TIGHTEST enclosing scope that pairs that label with its value. Reads TRIP
+    // specifically: if a deadhead value shares the scope, the number is anchored
+    // to the word "trip" (no dh/digit between) so an adjacent DH "mi" is never
+    // mistaken for trip miles. Excludes our own box. Returns 0/null if not found.
+    function getDetailTripMiles(refEl) {
+      let panel = refEl;
+      for (let i = 0; i < 6 && panel && panel.parentElement; i++) {
+        const t = (panel.textContent || '').toLowerCase();
+        if (t.includes('trip') && t.includes('total')) break;
+        panel = panel.parentElement;
+      }
+      if (!panel || !panel.querySelectorAll) return null;
+
+      // Extract TRIP miles from a row's text. If "dh"/"deadhead" shares the text,
+      // anchor the number to "trip" (no dh/digit in between) so we cannot capture
+      // the deadhead value; otherwise take the lone "<n> mi".
+      const tripMilesFromText = (txt) => {
+        const s = String(txt).replace(/,/g, '').replace(/\s+/g, ' ');
+        if (/\b(dh|deadhead)\b/i.test(s)) {
+          const a = s.match(/trip(?:(?!dh|deadhead|\d)[\s\S]){0,15}?(\d{2,5})\s*mi\b/i);
+          return a ? (parseInt(a[1], 10) || 0) : 0;
+        }
+        const m = s.match(/(\d{2,5})\s*mi\b/i);
+        return m ? (parseInt(m[1], 10) || 0) : 0;
+      };
+
+      for (const e of panel.querySelectorAll('div,span,td,th,p,label,strong,b')) {
+        if (e.closest('[id^="dlm-"]')) continue;            // never read our own box
+        const t = (e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (!t || t.length > 18) continue;
+        if (!/^trip(\s*(miles|distance|mi))?$/.test(t)) continue;   // the "Trip" label leaf
+        // Climb to the tightest scope that actually pairs the Trip label with a
+        // "<n> mi" value — that scope is the Trip row, so the value is trip miles,
+        // not a sibling DH row's value.
+        let scope = e;
+        for (let up = 0; up < 4 && scope; up++) {
+          if (/\d{2,5}\s*mi\b/i.test((scope.textContent || '').replace(/,/g, ''))) {
+            const n = tripMilesFromText(scope.textContent || '');
+            if (n > 0) return n;
+          }
+          scope = scope.parentElement;
+        }
+      }
+      return null;
     }
 
     // ── Rate-panel anchor (text/label based — DAT renames hashed classes) ─────
