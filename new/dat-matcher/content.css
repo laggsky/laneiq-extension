@@ -179,7 +179,7 @@ html body [data-dlm-route-ok]:active {
   width:1222px; max-width:calc(100vw - 48px); max-height:calc(100vh - 72px);
   min-width:520px; min-height:360px;
   display:flex; flex-direction:column; overflow:hidden;
-  font-family:-apple-system,'SF Pro Text',BlinkMacSystemFont,system-ui,sans-serif;
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',system-ui,sans-serif;
 }
 /* 8-point resize handles (replace native resize:both). Thin invisible grab
    strips on each edge + small corner zones; corners sit above edges. They live
@@ -207,8 +207,8 @@ html body [data-dlm-route-ok]:active {
      translucent-white gradient. Title text stays dark + legible. */
   background:linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,.1));
 }
-.dlm-modal-hdr-title { font-size:15px; font-weight:600; color:#1d1d1f; letter-spacing:-.02em; }
-.dlm-modal-hdr-title span { color:#aeaeb2; margin:0 6px; font-weight:300; }
+.dlm-modal-hdr-title { font-size:13px; font-weight:600; color:#1d1d1f; letter-spacing:-.01em; }
+.dlm-modal-hdr-title span { color:#aeaeb2; margin:0 6px; font-weight:400; }
 /* Flat/plain buttons matching the Load History panel (#dlm-close etc.): no grey
    circle at rest (transparent background), faint circular hover only. */
 .dlm-modal-close {
@@ -306,7 +306,7 @@ html body [data-dlm-route-ok]:active {
 }
 .dlm-calc-body { padding:14px 20px 24px; display:flex; flex-direction:column; gap:9px; }
 .dlm-cf { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.dlm-cf-label { font-size:12px; color:#6e6e73; font-weight:500; min-width:72px; white-space:nowrap; }
+.dlm-cf-label { font-size:9px; color:#aeaeb2; font-weight:600; text-transform:uppercase; letter-spacing:.05em; min-width:72px; white-space:nowrap; }
 .dlm-cf-row {
   flex:1; display:flex; align-items:center; gap:3px;
   background:rgba(0,0,0,.04); border:1px solid rgba(0,0,0,.08);
@@ -323,7 +323,7 @@ html body [data-dlm-route-ok]:active {
 .dlm-cf-computed {
   background:rgba(0,0,0,.025); border-radius:8px; padding:5px 10px; margin:0 -10px;
 }
-.dlm-cf-val { font-size:14px; font-weight:600; color:#1d1d1f; letter-spacing:-.02em; }
+.dlm-cf-val { font-size:14px; font-weight:700; color:#1d1d1f; letter-spacing:-.02em; }
 .dlm-cf-sep { height:1px; background:rgba(0,0,0,.07); margin:3px 0; }
 .dlm-cf-profit-val {
   font-size:20px; font-weight:700; color:#1d1d1f;
