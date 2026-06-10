@@ -75,12 +75,19 @@
     if (rows.length) for (const k of Object.keys(rows[0])) {
       if (TRAILER_HEADERS.includes(k.trim().toLowerCase())) { trailerCol = k; break; }
     }
+    // Truck/tractor column — resolved separately from trailer so a file with BOTH
+    // columns keeps them distinct (the two never share header aliases).
+    const TRUCK_HEADERS = ['truck', 'truck type', 'tractor', 'power unit'];
+    let truckCol = '';
+    if (rows.length) for (const k of Object.keys(rows[0])) {
+      if (TRUCK_HEADERS.includes(k.trim().toLowerCase())) { truckCol = k; break; }
+    }
     for (const row of rows) {
       const origin = (row['Origin']||row['PickCity']||row['Pick City']||row['Origin City']||row['From City']||row['Shipper City']||'').trim();
       const dest   = (row['Destination']||row['DropCity']||row['Drop City']||row['Destination City']||row['To City']||row['Consignee City']||'').trim();
       const rate = cleanRate(row['Rate']||row['Total']||row['Gross']||row['Revenue']||row['Total Rate']||row['All In']||row['All-In']||row['Pay']||row['Line Haul']||row['Linehaul']||'');
       const broker = (row['Broker']||row['Broker company name']||'').trim();
-      const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight / Pallets / FT']||row['Weight']||row['Wt']||row['WT']||row['Weight (lbs)']||row['Gross Weight']||row['GrossWeight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), trailer: trailerCol ? (row[trailerCol]||'').trim() : '', _f: fileIdx };
+      const record = { origin, destination: dest, puDate: (row['PU Date']||'').trim(), rate, loadNum: (row['Load #']||'').trim(), weight: (row['Weight / Pallets / FT']||row['Weight']||row['Wt']||row['WT']||row['Weight (lbs)']||row['Gross Weight']||row['GrossWeight']||'').trim(), broker, pickupCompany: (row['Pickup Company + Full Address']||'').trim(), deliveryCompany: (row['Delivery Company + Full Address']||'').trim(), commodity: (row['Commodity']||'').trim(), trailer: trailerCol ? (row[trailerCol]||'').trim() : '', truck: truckCol ? (row[truckCol]||'').trim() : '', _f: fileIdx };
       if (!origin || origin.length < 2) continue; count++;
       const no = normKey(origin), nd = normKey(dest);
       if (no && nd) { const k = no+'|'+nd; if (!odIdx[k]) odIdx[k]=[]; odIdx[k].push(record); }
@@ -112,7 +119,7 @@
   // signature (NOT object reference) and add/remove it from the correct lane key.
   function _recSig(r) {
     return [r.loadNum||'', r.origin||'', r.destination||'', r.puDate||'', r.rate||'',
-            r.broker||'', r.trailer||'', r.weight||'', r.pickupCompany||'',
+            r.broker||'', r.trailer||'', r.truck||'', r.weight||'', r.pickupCompany||'',
             r.deliveryCompany||'', r.commodity||'', r._f].join('');
   }
   function _bucketHas(index, key, sig) {
@@ -1555,6 +1562,7 @@ if (so && ro && so !== ro) return false;
     { key: 'weight',    label: 'Weight / Pallets / FT' },
     { key: 'rate',      label: 'Rate' },
     { key: 'trailer',   label: 'Trailer' },
+    { key: 'truck',     label: 'Truck' },
     { key: 'pickup',    label: 'Pickup Company + Full Address' },
     { key: 'delivery',  label: 'Delivery Company + Full Address' },
     { key: 'commodity', label: 'Commodity' },
@@ -1562,10 +1570,11 @@ if (so && ro && so !== ro) return false;
     { key: 'loadNum',   label: 'Load #' },
   ];
   // Field key -> the canonical CSV header buildIndexesFromCSVRows reads.
-  // (trailer -> 'Trailer' is matched case-insensitively by its TRAILER_HEADERS.)
+  // (trailer -> 'Trailer' is matched case-insensitively by its TRAILER_HEADERS;
+  //  truck -> 'Truck' likewise by its TRUCK_HEADERS — kept distinct from trailer.)
   const FIELD_HEADER = {
     origin: 'Origin', puDate: 'PU Date', dest: 'Destination',
-    weight: 'Weight / Pallets / FT', rate: 'Rate', trailer: 'Trailer',
+    weight: 'Weight / Pallets / FT', rate: 'Rate', trailer: 'Trailer', truck: 'Truck',
     pickup: 'Pickup Company + Full Address', delivery: 'Delivery Company + Full Address',
     commodity: 'Commodity', broker: 'Broker', loadNum: 'Load #',
   };
@@ -1578,6 +1587,7 @@ if (so && ro && so !== ro) return false;
     'weight / pallets / ft':'weight','weight':'weight','wt':'weight','weight (lbs)':'weight','gross weight':'weight','grossweight':'weight','pallets':'weight','pieces':'weight',
     'rate':'rate','total':'rate','gross':'rate','revenue':'rate','total rate':'rate','all in':'rate','all-in':'rate','pay':'rate','line haul':'rate','linehaul':'rate','amount':'rate',
     'trailer':'trailer','trailer type':'trailer','equipment':'trailer','equip':'trailer','eq':'trailer','equipment type':'trailer',
+    'truck':'truck','truck type':'truck','tractor':'truck','power unit':'truck',
     'pickup company + full address':'pickup','pickup company':'pickup','pickup address':'pickup','shipper':'pickup','origin address':'pickup','pickup name':'pickup',
     'delivery company + full address':'delivery','delivery company':'delivery','delivery address':'delivery','consignee':'delivery','destination address':'delivery','delivery name':'delivery',
     'commodity':'commodity','freight':'commodity','product':'commodity','commodity type':'commodity',
@@ -2443,6 +2453,7 @@ if (so && ro && so !== ro) return false;
         const vals = {
           broker:      val('dlm-ed-broker'),
           trailer:     val('dlm-ed-trailer'),
+          truck:       val('dlm-ed-truck'),
           rate:        val('dlm-ed-rate'),
           origin:      val('dlm-ed-origin'),
           destination: val('dlm-ed-dest'),
@@ -3193,6 +3204,14 @@ if (so && ro && so !== ro) return false;
       const trailer = String(r.trailer || '').trim();
       const trailerTag = (trailer && trailer.toLowerCase() !== 'nan')
         ? `<span class="dlm-eq">${esc(trailer)}</span>` : '';
+      // Truck/tractor tag — its own chip beside the trailer chip (CSV only; DB
+      // records have no truck field). Hidden when blank/"nan". Both chips share a
+      // flex row, and the row is omitted entirely when neither chip is present.
+      const truck = String(r.truck || '').trim();
+      const truckTag = (truck && truck.toLowerCase() !== 'nan')
+        ? `<span class="dlm-truck">${esc(truck)}</span>` : '';
+      const eqTags = (trailerTag || truckTag)
+        ? `<div style="display:flex;gap:4px;flex-wrap:wrap">${trailerTag}${truckTag}</div>` : '';
 
       const addrHtml = (addr) =>
         addr ? `${esc(addr.company)}${addr.street ? `<br><span style="font-size:10px;color:#8e8e93;font-weight:400">${esc(addr.street)}</span>` : ''}` : '';
@@ -3206,7 +3225,7 @@ if (so && ro && so !== ro) return false;
             <div style="display:flex;flex-direction:column;gap:2px;max-width:165px;min-width:0">
               <span class="dlm-ln">#${esc(ln)}</span>
               ${broker && broker !== 'nan' ? `<span style="font-size:11px;color:#6e6e73;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(broker)}</span>` : ''}
-              ${trailerTag}
+              ${eqTags}
             </div>
             <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">${gmailBtn}${outlookBtn}${noteBadgeBtn}${heartBtn}${editDelBtns}<span class="dlm-dt">${esc(dt)}</span></div>
           </div>
@@ -3248,7 +3267,7 @@ if (so && ro && so !== ro) return false;
     }
   }
 
-  // Apply a record edit across all three indexes. vals = {broker,trailer,rate,origin,destination}.
+  // Apply a record edit across all three indexes. vals = {broker,trailer,truck,rate,origin,destination}.
   async function applyRecordEdit(tok, vals) {
     const rec = _editPool[tok];
     if (!rec || typeof rec._f !== 'number') {           // DB guard + identity check
@@ -3274,6 +3293,7 @@ if (so && ro && so !== ro) return false;
       ...orig,
       broker:      String(vals.broker || '').trim(),
       trailer:     String(vals.trailer || '').trim(),
+      truck:       String(vals.truck || '').trim(),
       rate:        cleanRate(vals.rate),
       origin:      newOrigin,
       destination: String(vals.destination || '').trim(),
@@ -3348,6 +3368,7 @@ if (so && ro && so !== ro) return false;
       `<div style="padding:2px">
          ${field('Broker', r.broker, 'dlm-ed-broker')}
          ${field('Equipment', r.trailer, 'dlm-ed-trailer')}
+         ${field('Truck', r.truck, 'dlm-ed-truck')}
          ${field('Rate', r.rate, 'dlm-ed-rate')}
          ${field('From', r.origin, 'dlm-ed-origin')}
          ${field('To', r.destination, 'dlm-ed-dest')}

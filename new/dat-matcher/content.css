@@ -101,6 +101,7 @@
 .dlm-dt { font-size:11px; color:#aeaeb2; font-weight:500; white-space:nowrap; padding-top:2px; }
 /* Trailer/equipment tag — subtle muted pill in the card's left column */
 .dlm-eq { display:inline-block; align-self:flex-start; font-size:10px; font-weight:600; color:#6e6e73; background:rgba(0,0,0,.05); border-radius:5px; padding:2px 6px; letter-spacing:.01em; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dlm-truck { display:inline-block; align-self:flex-start; font-size:10px; font-weight:600; color:#6e6e73; background:rgba(0,0,0,.05); border-radius:5px; padding:2px 6px; letter-spacing:.01em; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .dlm-grid { display:grid; grid-template-columns:60px 1fr; gap:4px 8px; font-size:12px; align-items:start; }
 .dlm-k { color:#aeaeb2; font-size:9px; text-transform:uppercase; letter-spacing:.05em; padding-top:2px; font-weight:500; white-space:nowrap; }
 .dlm-v { color:#1d1d1f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
