@@ -4038,20 +4038,25 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
 
       el.parentNode.insertBefore(wrapper, el);
       wrapper.appendChild(el);
-      const BTN_BASE = 'width:176px;min-width:176px;max-width:176px;height:40px;padding:0 14px;font-size:12px;font-weight:700;letter-spacing:.01em;font-family:-apple-system,"SF Pro Text",BlinkMacSystemFont,system-ui,sans-serif;border-radius:10px;border:none;border-left:5px solid #0058e0;cursor:pointer;color:#0f1923;background:#eef2ff;box-sizing:border-box;display:inline-flex;align-items:center;gap:7px;box-shadow:0 10px 28px rgba(0,60,200,.32),0 4px 10px rgba(0,0,0,.18);transition:box-shadow .15s,background .15s;';
+      // Neutral grey body (gradient bg #f5f5f7, text #1d1d1f) with the blue left
+      // accent stripe restored: border-left 5px #0058e0. The border-radius makes
+      // the stripe follow the rounded left corners. Soft drop shadow kept as-is.
+      const BTN_BASE = 'width:176px;min-width:176px;max-width:176px;height:40px;padding:0 14px;font-size:12px;font-weight:700;letter-spacing:.01em;font-family:-apple-system,"SF Pro Text",BlinkMacSystemFont,system-ui,sans-serif;border-radius:10px;border:none;border-left:5px solid #0058e0;cursor:pointer;color:#1d1d1f;background:#f5f5f7;box-sizing:border-box;display:inline-flex;align-items:center;gap:7px;box-shadow:0 10px 28px rgba(0,60,200,.32),0 4px 10px rgba(0,0,0,.18);transition:box-shadow .15s,background .15s;';
 
-      // Replace DAT's internal markup so their child styles can't fight ours
+      // Replace DAT's internal markup so their child styles can't fight ours.
+      // !important props keep DAT's own button styles from showing through on el;
+      // box-shadow important re-asserts the SAME soft shadow unchanged.
       el.textContent = 'View Route';
       el.style.cssText = BTN_BASE;
-      el.style.setProperty('background', '#eef2ff', 'important');
+      el.style.setProperty('background', '#f5f5f7', 'important');
       el.style.setProperty('border-left', '5px solid #0058e0', 'important');
-      el.style.setProperty('color', '#0f1923', 'important');
+      el.style.setProperty('color', '#1d1d1f', 'important');
       el.style.setProperty('box-shadow', '0 10px 28px rgba(0,60,200,.32),0 4px 10px rgba(0,0,0,.18)', 'important');
 
       // RPM / Maps button
       const rpmBtn = document.createElement('button');
       rpmBtn.innerHTML =
-        `<svg viewBox="0 0 16 16" width="13" height="13" fill="#0058e0" aria-hidden="true" style="flex-shrink:0">
+        `<svg viewBox="0 0 16 16" width="13" height="13" fill="#6e6e73" aria-hidden="true" style="flex-shrink:0">
            <path d="M8 1C5.24 1 3 3.24 3 6c0 3.9 5 9 5 9s5-5.1 5-9c0-2.76-2.24-5-5-5z
                     m0 7c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z"/>
          </svg>RPM / Maps`;
