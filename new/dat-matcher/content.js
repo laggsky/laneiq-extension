@@ -2,6 +2,24 @@
   'use strict';
   console.log('[LaneIQ] content script loaded');
 
+  // ── Pure helper: parse TRIP miles from a chunk of detail text ────────────────
+  // Exported for unit testing (see tests/trip-miles.test.js). Two guards keep it
+  // from ever returning a fused number:
+  //  • If "dh"/"deadhead" shares the text, anchor to "trip" (no dh/digit between)
+  //    so the deadhead value can't be captured.
+  //  • Left-bound every number with (?<![\d.]) so a preceding number's trailing
+  //    digit can't fuse onto Trip across an element boundary
+  //    (e.g. Total "$2,765" + Trip "2,635 mi" must NOT yield 52635).
+  function parseTripMiles(txt) {
+    const s = String(txt).replace(/,/g, '').replace(/\s+/g, ' ');
+    if (/\b(dh|deadhead)\b/i.test(s)) {
+      const a = s.match(/trip(?:(?!dh|deadhead|\d)[\s\S]){0,15}?(?<![\d.])(\d{2,5})\s*mi\b/i);
+      return a ? (parseInt(a[1], 10) || 0) : 0;
+    }
+    const m = s.match(/(?<![\d.])(\d{2,5})\s*mi\b/i);
+    return m ? (parseInt(m[1], 10) || 0) : 0;
+  }
+
   // Must match INDEX_VERSION in popup.js — if the stored index was built with
   // an older version, content.js will refuse to load it (treats it as empty).
   const INDEX_VERSION = 2;
@@ -4382,31 +4400,38 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       }
       if (!panel || !panel.querySelectorAll) return null;
 
-      // Extract TRIP miles from a row's text. If "dh"/"deadhead" shares the text,
-      // anchor the number to "trip" (no dh/digit in between) so we cannot capture
-      // the deadhead value; otherwise take the lone "<n> mi".
-      const tripMilesFromText = (txt) => {
-        const s = String(txt).replace(/,/g, '').replace(/\s+/g, ' ');
-        if (/\b(dh|deadhead)\b/i.test(s)) {
-          const a = s.match(/trip(?:(?!dh|deadhead|\d)[\s\S]){0,15}?(\d{2,5})\s*mi\b/i);
-          return a ? (parseInt(a[1], 10) || 0) : 0;
+      // PRIMARY: pair the "Trip" label to its OWN value cell by column index, so we
+      // read only the Trip number — never the adjacent Total cell. DAT lays the
+      // rate panel out as a row of .data-label labels (Total | Trip | Rate / mile)
+      // and a matching row of .data-item values; same index = same column. Reading
+      // the whole container's text instead fuses the Total value's trailing digit
+      // onto Trip (e.g. Total "$2,765" + Trip "2,635 mi" → "52635").
+      const labels = Array.from(panel.querySelectorAll('.data-label'))
+        .filter(e => !e.closest('[id^="dlm-"]'));
+      const items  = Array.from(panel.querySelectorAll('.data-item'))
+        .filter(e => !e.closest('[id^="dlm-"]'));
+      if (labels.length && items.length === labels.length) {
+        const ti = labels.findIndex(e =>
+          /^trip(\s*(miles|distance|mi))?$/.test((e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase()));
+        if (ti >= 0 && items[ti]) {
+          const n = parseTripMiles(items[ti].textContent || '');
+          if (n > 0) return n;
         }
-        const m = s.match(/(\d{2,5})\s*mi\b/i);
-        return m ? (parseInt(m[1], 10) || 0) : 0;
-      };
+      }
 
+      // FALLBACK (rename resilience): if the label/item pairing didn't resolve,
+      // climb from the "Trip" label leaf to the tightest scope that holds a
+      // "<n> mi" value. The left-bounded regex in parseTripMiles still prevents
+      // two adjacent numbers from fusing even when the scope is broad.
       for (const e of panel.querySelectorAll('div,span,td,th,p,label,strong,b')) {
         if (e.closest('[id^="dlm-"]')) continue;            // never read our own box
         const t = (e.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
         if (!t || t.length > 18) continue;
         if (!/^trip(\s*(miles|distance|mi))?$/.test(t)) continue;   // the "Trip" label leaf
-        // Climb to the tightest scope that actually pairs the Trip label with a
-        // "<n> mi" value — that scope is the Trip row, so the value is trip miles,
-        // not a sibling DH row's value.
         let scope = e;
         for (let up = 0; up < 4 && scope; up++) {
           if (/\d{2,5}\s*mi\b/i.test((scope.textContent || '').replace(/,/g, ''))) {
-            const n = tripMilesFromText(scope.textContent || '');
+            const n = parseTripMiles(scope.textContent || '');
             if (n > 0) return n;
           }
           scope = scope.parentElement;
@@ -5722,7 +5747,13 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
     }
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-  else init();
+  // Export the pure parser for Node/Jest. Guarded so it's a no-op in the browser.
+  if (typeof module !== 'undefined' && module.exports) module.exports = { parseTripMiles };
+
+  // Browser bootstrap only — skipped under Node (no document), keeping require() safe.
+  if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+    else init();
+  }
 
 })();
