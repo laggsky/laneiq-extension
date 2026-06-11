@@ -1,6 +1,16 @@
 const VALIDATE_URL = 'https://laneiq-backend-production.up.railway.app/validate';
 const NUM_SCREENS  = 7;
 
+// Stable per-install device id (privacy-friendly UUID, no fingerprinting).
+// Created once and reused; shared across all extension contexts via storage.local.
+async function getDeviceId() {
+  const { dlmDeviceId } = await chrome.storage.local.get('dlmDeviceId');
+  if (dlmDeviceId) return dlmDeviceId;
+  const id = crypto.randomUUID();
+  await chrome.storage.local.set({ dlmDeviceId: id });
+  return id;
+}
+
 const deck    = document.getElementById('deck');
 const screens = Array.from(document.querySelectorAll('.screen'));
 const dots    = Array.from(document.querySelectorAll('.pdot'));
@@ -109,10 +119,11 @@ async function handleActivate() {
   actInput.disabled   = true;
 
   try {
+    const deviceId = await getDeviceId();
     const resp = await fetch(VALIDATE_URL, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ key: raw }),
+      body:    JSON.stringify({ key: raw, deviceId }),
     });
 
     if (!resp.ok) throw new Error('server');
@@ -120,7 +131,10 @@ async function handleActivate() {
     const data = await resp.json();
 
     if (!data.valid) {
-      showActError("That key isn't valid — check your email and try again.");
+      const msg = data.reason === 'device_limit'
+        ? `This license is already active on ${data.deviceLimit || 3} devices. Contact support@laneiq.org to reset a device.`
+        : "That key isn't valid — check your email and try again.";
+      showActError(msg);
       actBtn.disabled    = false;
       actBtn.textContent = 'Activate';
       actInput.disabled  = false;

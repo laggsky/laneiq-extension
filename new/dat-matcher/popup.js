@@ -2,6 +2,16 @@
 const VALIDATION_URL = 'https://laneiq-backend-production.up.railway.app/validate';
 const LICENSE_GRACE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Stable per-install device id (privacy-friendly UUID, no fingerprinting).
+// Created once and reused; shared across all extension contexts via storage.local.
+async function getDeviceId() {
+  const { dlmDeviceId } = await chrome.storage.local.get('dlmDeviceId');
+  if (dlmDeviceId) return dlmDeviceId;
+  const id = crypto.randomUUID();
+  await chrome.storage.local.set({ dlmDeviceId: id });
+  return id;
+}
+
 async function validateLicenseKey(key, forceRefresh = false) {
   if (!key || typeof key !== 'string' || !key.trim()) {
     return { valid: false, cached: false };
@@ -21,10 +31,11 @@ async function validateLicenseKey(key, forceRefresh = false) {
   }
 
   try {
+    const deviceId = await getDeviceId();
     const resp = await fetch(VALIDATION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: trimmedKey }),
+      body: JSON.stringify({ key: trimmedKey, deviceId }),
     });
     const data = await resp.json();
     if (data.valid) {
@@ -37,7 +48,7 @@ async function validateLicenseKey(key, forceRefresh = false) {
       return { valid: true, cached: false, tier: data.tier || 'solo' };
     }
     await chrome.storage.local.set({ licenseValid: false });
-    return { valid: false, cached: false, tier: null };
+    return { valid: false, cached: false, tier: null, reason: data.reason || null, deviceLimit: data.deviceLimit || null };
   } catch {
     if (cachedKey === trimmedKey && cachedValid && checkedAt) {
       const age = Date.now() - new Date(checkedAt).getTime();
@@ -85,7 +96,9 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       if (result.valid) {
         window.location.reload();
       } else {
-        activationStatus.textContent = 'Invalid key — check your key and try again.';
+        activationStatus.textContent = result.reason === 'device_limit'
+          ? `This license is already active on ${result.deviceLimit || 3} devices. Contact support@laneiq.org to reset a device.`
+          : 'Invalid key — check your key and try again.';
         activationBtn.textContent = 'Activate';
         activationBtn.disabled = false;
       }
@@ -100,14 +113,18 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     try {
       const { licenseKey } = await chrome.storage.local.get(['licenseKey']);
       if (!licenseKey) return;
+      const deviceId = await getDeviceId();
       const resp = await fetch(VALIDATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: licenseKey }),
+        body: JSON.stringify({ key: licenseKey, deviceId }),
       });
       if (!resp.ok) return;
       const data = await resp.json();
       if (!data.valid) {
+        // Soft-degrade: never kill an already-working install over a device-limit
+        // response (this device is normally already registered anyway).
+        if (data.reason === 'device_limit') return;
         await chrome.storage.local.set({ licenseValid: false });
         window.location.reload();
         return;

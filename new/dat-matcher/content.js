@@ -3567,6 +3567,16 @@ if (so && ro && so !== ro) return false;
     try { await _doInit(); } finally { _initializing = false; }
   }
 
+  // Stable per-install device id (privacy-friendly UUID, no fingerprinting).
+  // Created once and reused; shared across all extension contexts via storage.local.
+  async function getDeviceId() {
+    const { dlmDeviceId } = await chrome.storage.local.get('dlmDeviceId');
+    if (dlmDeviceId) return dlmDeviceId;
+    const id = crypto.randomUUID();
+    await chrome.storage.local.set({ dlmDeviceId: id });
+    return id;
+  }
+
   async function _doInit() {
     if (!window.location.href.includes('one.dat.com')) return;
     if (_initialized) return; // indexes already in memory — nothing to do
@@ -3589,10 +3599,11 @@ if (so && ro && so !== ro) return false;
       licenseOK = true;
       backendTier = _licenseCachedTier;
     } else try {
+      const deviceId = await getDeviceId();
       const resp = await fetch(VALIDATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: lic.licenseKey }),
+        body: JSON.stringify({ key: lic.licenseKey, deviceId }),
       });
       if (resp.ok) {
         const data = await resp.json();
@@ -3606,6 +3617,13 @@ if (so && ro && so !== ro) return false;
             licenseCheckedAt: new Date().toISOString(),
           });
           console.log('[LaneIQ] license validated by Railway | tier:', backendTier);
+        } else if (data.reason === 'device_limit') {
+          // Soft-degrade (option a): never abruptly kill a working session over a
+          // device-limit response. If this install was previously valid, keep it
+          // running; only a never-activated install is left ungated/inactive.
+          console.warn('[LaneIQ] device limit reached for this license —', data.deviceLimit, 'devices');
+          if (!lic.licenseValid) return;
+          licenseOK = true;
         } else {
           _licenseValidatedAt = 0;
           _licenseCachedTier  = null;
