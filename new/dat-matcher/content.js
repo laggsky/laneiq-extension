@@ -489,7 +489,7 @@
           <div class="dlm-rate-card-lane">${oCity} <span class="dlm-rate-card-arrow">→</span> ${dCity}</div>
           <div class="dlm-rate-card-stats">
             <div class="dlm-rate-stat"><div class="dlm-rate-stat-k">Avg</div><div class="dlm-rate-stat-v">${st.avg}</div></div>
-            <div class="dlm-rate-stat dlm-rate-stat-best"><div class="dlm-rate-stat-k">Best</div><div class="dlm-rate-stat-v">${st.best}</div></div>
+            <div class="dlm-rate-stat dlm-rate-stat-best dlm-best-jump" data-jump="best" title="Jump to highest-rate load"><div class="dlm-rate-stat-k">Best</div><div class="dlm-rate-stat-v">${st.best}<span class="dlm-best-jump-arrow">⤓</span></div></div>
           </div>
           <div class="dlm-rate-card-sub">${matches.length} loads in radius</div>
         </div>
@@ -2469,6 +2469,53 @@ if (so && ro && so !== ro) return false;
         chrome.storage.local.set({ lovedLoads });
         if (_activeTab === 'loved') switchTab('loved');
       }
+    });
+
+    // Lane Lookup "Best" box → scroll to the highest-rate load + flash it.
+    // Resolves the target from the LIVE DOM on every click, so it stays correct
+    // after slider/field re-renders. Scoped to the box's own results container.
+    d.querySelector('#dlm-body').addEventListener('click', e => {
+      const box = e.target.closest('.dlm-best-jump');
+      if (!box) return;
+      e.stopPropagation();
+      const container = box.closest('#dlm-radius-results');
+      if (!container) return;
+      const rows = Array.from(container.querySelectorAll('.dlm-rec'));
+      if (!rows.length) return;
+
+      const parseRate = el => {
+        const v = el && el.querySelector('.dlm-rate');
+        if (!v) return NaN;
+        return parseFloat(v.textContent.replace(/[^0-9.]/g, ''));
+      };
+
+      // Prefer the first row whose rate exactly equals the displayed Best value
+      // (first-match wins on ties). Fall back to the highest VISIBLE row (handles
+      // the Best load sitting past the 50-row render cap) using the same rate
+      // filter calcStats uses (>0 && <=25000), so a >25k outlier never wins.
+      const bestValEl = box.querySelector('.dlm-rate-stat-v');
+      const bestVal = bestValEl ? parseFloat(bestValEl.textContent.replace(/[^0-9.]/g, '')) : NaN;
+
+      let target = null;
+      if (!isNaN(bestVal)) target = rows.find(r => parseRate(r) === bestVal) || null;
+      if (!target) {
+        let max = -1;
+        for (const r of rows) {
+          const rate = parseRate(r);
+          if (rate > 0 && rate <= 25000 && rate > max) { max = rate; target = r; }
+        }
+      }
+      if (!target) return;
+
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Re-trigger on repeat clicks: clear the class, force reflow, re-add.
+      target.classList.remove('dlm-rec-flash');
+      void target.offsetWidth;
+      target.classList.add('dlm-rec-flash');
+      target.addEventListener('animationend', function onEnd() {
+        target.classList.remove('dlm-rec-flash');
+        target.removeEventListener('animationend', onEnd);
+      });
     });
 
     // Edit / delete delegation (CSV-history cards only) — survives #dlm-body rerenders.

@@ -442,6 +442,18 @@ html body [data-dlm-route-ok]:active {
 .dlm-rate-card-stats { display:flex; gap:10px; }
 .dlm-rate-stat { flex:1; background:rgba(245,166,35,.08); border-radius:9px; padding:8px 10px; }
 .dlm-rate-stat-best { background:rgba(52,199,89,.10); }
+/* Clickable "Best" box → jumps to the highest-rate load below. */
+.dlm-best-jump { cursor:pointer; transition:background .15s ease, box-shadow .15s ease, transform .1s ease; }
+.dlm-best-jump:hover { background:rgba(52,199,89,.18); box-shadow:0 2px 8px rgba(52,199,89,.22); }
+.dlm-best-jump:active { transform:translateY(1px); }
+.dlm-best-jump-arrow { font-size:11px; font-weight:700; color:#34c759; margin-left:4px; opacity:.65; vertical-align:1px; }
+.dlm-best-jump:hover .dlm-best-jump-arrow { opacity:1; }
+/* Brief green flash on the load the Best box points to. */
+@keyframes dlmFlash {
+  0%   { background:rgba(52,199,89,.28); box-shadow:0 0 0 2px rgba(52,199,89,.55), 0 6px 16px rgba(0,0,0,.10),0 2px 5px rgba(0,0,0,.07); }
+  100% { background:#fff; box-shadow:0 6px 16px rgba(0,0,0,.10),0 2px 5px rgba(0,0,0,.07); }
+}
+.dlm-rec-flash { animation:dlmFlash 1.5s ease-out; }
 .dlm-rate-stat-k { font-size:9px; font-weight:600; color:#aeaeb2; text-transform:uppercase; letter-spacing:.05em; margin-bottom:3px; }
 .dlm-rate-stat-v { font-size:17px; font-weight:700; color:#1d1d1f; letter-spacing:-.02em; }
 .dlm-rate-card-sub { font-size:11px; color:#aeaeb2; font-weight:500; margin-top:9px; }
