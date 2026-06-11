@@ -32,9 +32,9 @@
 ---
 
 ## Current Version
-- Manifest: 1.38
-- Chrome Store target: v1.38 (Excel .xlsx/.xls upload via vendored SheetJS, target-rate calculator box, RPM/route font match to side panel, separate Truck field in CSV/Excel mapper)
-- Last submitted to store: v1.37 (June 9 2026 — shipped public; superseded by 1.38)
+- Manifest: 1.39
+- Chrome Store target: v1.39 (Miles-fix (read DAT on-page Trip miles before proxy), Check Today's Market Trends button (Hot Regions→Market), driver-pay mode toggle ($/mi or % of posted rate) in inline+detached calculators, load-detail button restyle)
+- Last submitted to store: v1.38 (June 10 2026 — UNDER REVIEW; do not touch that submission)
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
 A stale v1.29 once shipped because code landed but the manifest was never
