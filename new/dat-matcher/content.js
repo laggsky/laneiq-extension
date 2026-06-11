@@ -44,7 +44,9 @@
   let _routeRev = 0;              // monotonic routeState revision (every push bumps it)
   let _routeCmdNonce = null;      // last-applied routeCommand nonce (apply-once, no loops)
   let _routeClosedNonce = null;   // last-seen routeClosed token → user closed the float window: tear the inline modal down completely (do NOT re-show)
-  let _dlmT;
+  let _scanQueued = false;        // rAF coalescing guard for the scroll/mutation scan
+  let _scanObserver = null;       // the MutationObserver instance (re-targeted lazily)
+  let _scanObsTarget = null;      // element currently observed (rows' scroll container, or document.body)
   let _radiusTimer = null;
   // Lane Lookup radius settings persist across load-row switches + panel rebuilds.
   let _radiusOriginMi = 50, _radiusDestMi = 50;
@@ -1130,8 +1132,24 @@ if (so && ro && so !== ro) return false;
   }
 
   // ── Process one row ─────────────────────────────────────────────────────────
+  // Cheap row change-detection signature. Materializes textContent ONCE (same cost
+  // as reading .length) and folds in the head+tail so two different loads reused in
+  // the same virtualized element can't collide on length alone — guarding the tier
+  // against a false skip. New/changed content always yields a different signature.
+  function _rowSig(row) {
+    const t = row.textContent || '';
+    return t.length + '|' + t.slice(0, 16) + '|' + t.slice(-16);
+  }
+
   function processRow(row) {
     if (!row || row.offsetWidth < 100) return;
+
+    // Fast pre-check: a fully-stamped row whose visible text is unchanged needs no
+    // re-extraction. The signature read is far cheaper than getCities' querySelectors
+    // + regex + stripColLabel, so at 60fps only genuinely new/changed rows pay those.
+    // dlmSig is refreshed at every stamp/confirm path below (incl. after our own
+    // badge/email-chip mutate the row), so it self-corrects within a frame.
+    if (row.dataset.dlmOrigin !== undefined && row.dataset.dlmSig === _rowSig(row)) return;
 
     let { origin, dest } = getCities(row);
     // Strip any text after the state code — the extension's own badge ("✓ 1x")
@@ -1145,7 +1163,10 @@ if (so && ro && so !== ro) return false;
     // the main guard against redundant matching on unchanged visible rows.
     // NOTE: only stamped after a successful match, so unmatched rows never
     // trigger this guard and are retried on every scan until indexes are ready.
-    if (row.dataset.dlmOrigin === origin && row.dataset.dlmDest === (dest || '')) return;
+    if (row.dataset.dlmOrigin === origin && row.dataset.dlmDest === (dest || '')) {
+      row.dataset.dlmSig = _rowSig(row);  // absorb our own badge/chip length delta
+      return;
+    }
 
     // Row is new or DAT reused the element for different data — clear stale state.
     row.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
@@ -1159,6 +1180,7 @@ if (so && ro && so !== ro) return false;
     if (useDB) {
       row.dataset.dlmOrigin = origin;
       row.dataset.dlmDest   = dest || '';
+      row.dataset.dlmSig    = _rowSig(row);
       const cacheKey = `${origin}|${dest || ''}`;
       const cached = _dbMatchCache[cacheKey];
       if (cached && !useCSV) {
@@ -1231,6 +1253,9 @@ if (so && ro && so !== ro) return false;
     }
 
     row.dataset.dlmBroker = datBroker || '';
+    // Stamp the change-detection signature AFTER the badge is appended so a steady
+    // (unchanged) row matches on the next frame and short-circuits at the pre-check.
+    row.dataset.dlmSig = _rowSig(row);
 
     // Re-attach click listener every time this row element is processed.
     // DAT re-renders row elements on click (React reconciliation), so a fresh
@@ -3586,8 +3611,51 @@ if (so && ro && so !== ro) return false;
   }
 
   // ── Scan ────────────────────────────────────────────────────────────────────
+  // Coalesce mutation bursts to at most one scan per animation frame. Unlike the
+  // old 300ms trailing debounce (which kept resetting during continuous scroll and
+  // so never fired until scrolling stopped), this runs within ~1 frame of new rows
+  // appearing, keeping highlights in step with fast scrolling without re-running
+  // per-mutation (the rAF gate caps it to ≤ one scan per frame, so no scroll jank).
+  function queueScan() {
+    if (_scanQueued) return;
+    _scanQueued = true;
+    requestAnimationFrame(() => { _scanQueued = false; scan(); });
+  }
+
+  // The scrollable ancestor of the load rows (DAT virtualizes inside it). Narrowing
+  // the observer here cuts callback noise from unrelated page mutations. Returns
+  // null when rows aren't rendered yet or no inner scroller exists → caller uses body.
+  function findRowsScrollContainer() {
+    const row = document.querySelector('[class*="row-container"], [class*="row-cells"]');
+    if (!row) return null;
+    let el = row.parentElement;
+    for (let i = 0; i < 12 && el && el !== document.body; i++) {
+      const oy = getComputedStyle(el).overflowY;
+      if ((oy === 'auto' || oy === 'scroll' || oy === 'overlay') && el.scrollHeight > el.clientHeight + 4) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  // Point the observer at the rows' scroll container once it exists, else document.body.
+  // Re-targets if the current target was torn out (SPA navigation), so detection never
+  // goes stale. Cheap in steady state: returns early while already on a live container.
+  function ensureScanObserver() {
+    if (!_scanObserver) _scanObserver = new MutationObserver(queueScan);
+    if (_scanObsTarget && _scanObsTarget.isConnected && _scanObsTarget !== document.body) return;
+    const found = findRowsScrollContainer();
+    const desired = (found && found.isConnected) ? found : document.body;
+    if (desired === _scanObsTarget && desired.isConnected) return;
+    _scanObserver.disconnect();
+    _scanObserver.observe(desired, { childList: true, subtree: true });
+    _scanObsTarget = desired;
+  }
+
   function scan() {
     _cityFailCount = 0;
+    ensureScanObserver();   // keep the observer pointed at the live rows container
     const usingAPI = licenseTier === 'pro' && useDB;
     if (!odIndex && !oIndex && !usingAPI) return;
     // processRow skips rows whose origin/dest hasn't changed, so no bulk
@@ -3622,6 +3690,7 @@ if (so && ro && so !== ro) return false;
       delete el.dataset.dlmOrigin;
       delete el.dataset.dlmDest;
       delete el.dataset.dlmMatch;
+      delete el.dataset.dlmSig;
     });
     _dbMatchCache = {};
   }
@@ -3922,18 +3991,16 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
       scan();
       setTimeout(scan, 500);
 
-      // Debounced observer: wait 300ms for the DOM to settle before re-scanning.
-      const obs = new MutationObserver(() => {
-        clearTimeout(_dlmT);
-        _dlmT = setTimeout(scan, 300);
-      });
-      obs.observe(document.body, { childList: true, subtree: true });
+      // rAF-coalesced observer: highlight new rows within ~1 frame of them appearing
+      // (replaces the old 300ms trailing debounce that scroll never let settle).
+      // ensureScanObserver() picks the rows' scroll container, falling back to body.
+      ensureScanObserver();
 
       let lastUrl = location.href;
       setInterval(() => {
         if (location.href !== lastUrl) {
           lastUrl = location.href;
-          setTimeout(scan, 500);
+          setTimeout(scan, 500);   // scan() re-targets the observer if the container changed
         }
       }, 700);
 
