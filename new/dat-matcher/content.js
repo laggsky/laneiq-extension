@@ -1132,24 +1132,19 @@ if (so && ro && so !== ro) return false;
   }
 
   // ── Process one row ─────────────────────────────────────────────────────────
-  // Cheap row change-detection signature. Materializes textContent ONCE (same cost
-  // as reading .length) and folds in the head+tail so two different loads reused in
-  // the same virtualized element can't collide on length alone — guarding the tier
-  // against a false skip. New/changed content always yields a different signature.
-  function _rowSig(row) {
+  // Row change-detection signature. Folds length + head + tail of textContent AND the
+  // EXTRACTED origin|dest. The cities sit in the MIDDLE of the row text, so a
+  // virtualized element DAT reuses for a new load can share the same length + first16
+  // + last16 as the old load and collide on those alone — folding the parsed cities in
+  // guarantees a reused element with new cities never matches the old signature, so the
+  // pre-check can't false-skip it. New/changed content always yields a different sig.
+  function _rowSig(row, origin, dest) {
     const t = row.textContent || '';
-    return t.length + '|' + t.slice(0, 16) + '|' + t.slice(-16);
+    return t.length + '|' + t.slice(0, 16) + '|' + t.slice(-16) + '|' + (origin || '') + '|' + (dest || '');
   }
 
   function processRow(row) {
     if (!row || row.offsetWidth < 100) return;
-
-    // Fast pre-check: a fully-stamped row whose visible text is unchanged needs no
-    // re-extraction. The signature read is far cheaper than getCities' querySelectors
-    // + regex + stripColLabel, so at 60fps only genuinely new/changed rows pay those.
-    // dlmSig is refreshed at every stamp/confirm path below (incl. after our own
-    // badge/email-chip mutate the row), so it self-corrects within a frame.
-    if (row.dataset.dlmOrigin !== undefined && row.dataset.dlmSig === _rowSig(row)) return;
 
     let { origin, dest } = getCities(row);
     // Strip any text after the state code — the extension's own badge ("✓ 1x")
@@ -1159,12 +1154,26 @@ if (so && ro && so !== ro) return false;
     if (dest) dest = dest.replace(/(,\s*[A-Z]{2})\b.*$/, '$1').trim();
     if (!origin || origin.length < 3) return;
 
-    // Skip rows whose city data hasn't changed since the last scan — this is
-    // the main guard against redundant matching on unchanged visible rows.
-    // NOTE: only stamped after a successful match, so unmatched rows never
-    // trigger this guard and are retried on every scan until indexes are ready.
-    if (row.dataset.dlmOrigin === origin && row.dataset.dlmDest === (dest || '')) {
-      row.dataset.dlmSig = _rowSig(row);  // absorb our own badge/chip length delta
+    // Does the row currently carry one of our tier classes? BOTH short-circuits below
+    // are gated on this. A row with NO tier class is NEVER skipped — it keeps being
+    // retried every scan until it actually earns a highlight. This is what kills the
+    // "stamped-before-highlighted" lockout: an early dataset stamp (the useDB block
+    // below stamps dlmOrigin/dlmDest before any match, and stale state survives on a
+    // reused element) can no longer convince either guard that a colorless row is done.
+    const hasTier = row.classList.contains('dlm-green')  || row.classList.contains('dlm-yellow') ||
+                    row.classList.contains('dlm-blue')   || row.classList.contains('dlm-purple');
+
+    // Fast pre-check: a COLORED row whose content (incl. its extracted origin|dest) is
+    // unchanged needs no re-matching — short-circuit before the index lookups + badge
+    // DOM work, keeping fast scroll cheap for already-highlighted rows.
+    if (hasTier && row.dataset.dlmSig === _rowSig(row, origin, dest)) return;
+
+    // Colored row whose cities are unchanged but whose text length shifted (our own
+    // badge / email chip mutated it): re-absorb the signature so the next frame
+    // short-circuits at the pre-check above. Gated on hasTier so an early dlmOrigin
+    // stamp (useDB block / reuse) can never short-circuit a colorless row here.
+    if (hasTier && row.dataset.dlmOrigin === origin && row.dataset.dlmDest === (dest || '')) {
+      row.dataset.dlmSig = _rowSig(row, origin, dest);  // absorb our own badge/chip length delta
       return;
     }
 
@@ -1180,7 +1189,11 @@ if (so && ro && so !== ro) return false;
     if (useDB) {
       row.dataset.dlmOrigin = origin;
       row.dataset.dlmDest   = dest || '';
-      row.dataset.dlmSig    = _rowSig(row);
+      // NOTE: do NOT stamp dlmSig here. dlmSig is the "fully highlighted" marker the
+      // pre-check trusts — writing it before a tier class is applied is exactly what
+      // locked rows out unhighlighted. It is stamped only once a class is actually
+      // added: in the cache-hit branch just below, by the CSV path further down, or by
+      // runBatchHighlight when the async DB result colors the row.
       const cacheKey = `${origin}|${dest || ''}`;
       const cached = _dbMatchCache[cacheKey];
       if (cached && !useCSV) {
@@ -1190,6 +1203,7 @@ if (so && ro && so !== ro) return false;
         } else {
           row.classList.add(cached.loadCount >= 3 ? 'dlm-green' : 'dlm-yellow');
         }
+        row.dataset.dlmSig = _rowSig(row, origin, dest);  // colored now → safe to stamp
       }
       if (!useCSV) return;
     }
@@ -1255,7 +1269,7 @@ if (so && ro && so !== ro) return false;
     row.dataset.dlmBroker = datBroker || '';
     // Stamp the change-detection signature AFTER the badge is appended so a steady
     // (unchanged) row matches on the next frame and short-circuits at the pre-check.
-    row.dataset.dlmSig = _rowSig(row);
+    row.dataset.dlmSig = _rowSig(row, origin, dest);
 
     // Re-attach click listener every time this row element is processed.
     // DAT re-renders row elements on click (React reconciliation), so a fresh
@@ -3601,6 +3615,10 @@ if (so && ro && so !== ro) return false;
             row.classList.add(match.loadCount >= 3 ? 'dlm-green' : 'dlm-yellow');
           }
           row.dataset.dlmDbMatch = JSON.stringify(match);
+          // Row is colored now → stamp the pre-check signature so the next scan
+          // short-circuits it. Use the stored (stripped) cities so the sig matches
+          // what processRow's pre-check recomputes from getCities on the next pass.
+          row.dataset.dlmSig = _rowSig(row, row.dataset.dlmOrigin || '', row.dataset.dlmDest || '');
         });
       });
 

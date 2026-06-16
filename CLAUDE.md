@@ -32,8 +32,9 @@
 ---
 
 ## Current Version
-- Manifest: 1.39
-- Chrome Store target: v1.39 (Miles-fix (read DAT on-page Trip miles before proxy), Check Today's Market Trends button (Hot Regions→Market), driver-pay mode toggle ($/mi or % of posted rate) in inline+detached calculators, load-detail button restyle)
+- Manifest: 1.41
+- Chrome Store target: v1.41 (fix rows staying unhighlighted until refresh — pre-check stamped dlmSig before the row was actually highlighted; hasTier-gated skip guards so a colorless row is always retried, collision-proof city-aware _rowSig, dlmSig stamped only once a tier class is applied)
+- v1.40 (live, public): Blue origin-tier stripe at Age|Rate cell boundary, rAF-coalesced scroll re-highlight, trip-miles parse fix, click-BEST scroll+highlight, device-limited activation
 - Last submitted to store: v1.38 (June 10 2026 — UNDER REVIEW; do not touch that submission)
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
