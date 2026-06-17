@@ -990,13 +990,98 @@ if (so && ro && so !== ro) return false;
     return '';
   }
 
+  // ── DAT's posted TRIP miles — the SINGLE source of truth for RPM ──────────────
+  // Shared by the board green signal (applyRpmHighlight) AND the target-rate box so the
+  // two can NEVER disagree on the same load. Reads the isolated load-trip-cell (a bare
+  // number, no "mi" suffix → direct digit parse). Returns 0 when absent. Using DAT's
+  // posted Trip (not a Google route distance) means the figure doesn't change when the
+  // user opens the load — the box used to prefer route miles, which differed by a few mi.
+  function getRowTripMiles(row) {
+    const cell = row && row.querySelector('[data-test="load-trip-cell"]');
+    const m = cell && (cell.textContent || '').match(/[\d,]+/);
+    return m ? parseInt(m[0].replace(/,/g, ''), 10) : 0;
+  }
+
+  // Walk up from an element in the detail/Rate panel to the load row that holds the Trip
+  // cell, then read DAT's posted Trip — the box's analogue of milesFromChip (DH). Returns
+  // 0 if no row Trip cell is found, so callers fall back to detail/route miles.
+  function tripFromChip(el) {
+    let node = el;
+    while (node && node !== document.body) {
+      if (node.querySelector && node.querySelector('[data-test="load-trip-cell"]')) {
+        return getRowTripMiles(node);
+      }
+      node = node.parentElement;
+    }
+    return 0;
+  }
+
+  // ── Target-RPM signal: soft green tint + our HONEST deadhead-inclusive RPM on rows that beat it ──
+  // realRpm = postedRate / (tripMiles + DH-O). DAT's own "$X.XX/mi" excludes deadhead, so
+  // it overstates the true rate; on rows whose realRpm meets/beats the user's saved Target
+  // $/mi (dlmTargetRpm — the SAME value the target-rate calculator box persists) we:
+  //   • soft-green-tint the whole rate cell (easy to spot, calm — not a loud wash),
+  //   • HIDE DAT's $/mi span and render OUR realRpm via a ::after pseudo-element as
+  //     "$X.XX w/DH" in calm muted gray — the tint signals on-target, not the text color,
+  //   • drop the "*" estimated marker — realRpm is our exact computation.
+  // No red, no badge. Reuses the existing setting; 0/empty = feature off.
+  //
+  // _rowSig SAFETY: this perturbs row.textContent by ZERO. The tint + hide are classes;
+  // our number is a CSS ::after (pseudo-element content is not in textContent); and the
+  // hidden $/mi span (display:none) STAYS in textContent. So the v1.41/v1.42 highlight
+  // signature is byte-identical — no scan churn, no false-skip risk. Verified live.
+  //
+  // Runs per row in the scan loop, SEPARATE from processRow (which short-circuits matched
+  // rows via the v1.41 pre-check). Idempotent every scan: it sets or restores state from
+  // the live numbers, so a target change, a reused virtualized row, or a now-missing value
+  // all self-correct on the next scan. Reads only isolated, rename-resistant DAT cells.
+  function applyRpmHighlight(row) {
+    const rateCell = row.querySelector('[data-test="load-rate-cell"]');
+    // The $/mi lives in .calculated-rate > span; .calculated-rate is what we drive (hide
+    // its span via class + render our ::after). Absent on rows with no rate (shown "–").
+    const calc = rateCell && rateCell.querySelector('.calculated-rate');
+    // Restore a row to DAT's native rendering (idempotent — safe when nothing was applied).
+    const restore = () => {
+      row.classList.remove('dlm-rpm-on');   // whole-row green tint + right-edge green stripe
+      if (calc) { calc.classList.remove('dlm-rpm-rewrite'); calc.removeAttribute('data-dlm-rpm'); }
+    };
+
+    if (!(dlmTargetRpm > 0)) return restore();   // feature off → strip any stale signal
+    if (!calc) return;                           // no $/mi block → nothing to do
+
+    // Posted RATE: first $ amount in the rate cell ("$4,000$2.40*/mi" → 4000), never
+    // the pre-divided per-mile that follows it.
+    const rateM = (rateCell.textContent || '').match(/\$\s*([\d,]+(?:\.\d{1,2})?)/);
+    const rate  = rateM ? parseFloat(rateM[1].replace(/,/g, '')) : 0;
+
+    // TRIP miles + DH-O via the SHARED readers (same ones the target-rate box uses), so
+    // board RPM === box RPM on every load. getRowTripMiles: DAT's posted Trip. getMiles:
+    // DH-O ('' when missing ⇒ skip; a real "0" is kept — origin sits at pickup).
+    const trip   = getRowTripMiles(row);
+    const dhoStr = getMiles(row);
+    const dho    = dhoStr === '' ? null : parseInt(dhoStr, 10);
+
+    // Any missing/unparseable input → never guess; restore DAT's native cell and bail.
+    if (!(rate > 0) || !(trip > 0) || dho === null) return restore();
+
+    const realRpm = rate / (trip + dho);
+    if (realRpm < dlmTargetRpm) return restore();   // doesn't beat target → leave untouched
+
+    // Qualifies: tint the whole row + add the right-edge green stripe (the dlm-rpm-on row
+    // class drives both, mirroring .dlm-yellow), hide DAT's $/mi, render our exact figure
+    // via ::after. Idempotent — re-setting the same class/attr each scan is a no-op for textContent.
+    row.classList.add('dlm-rpm-on');
+    calc.classList.add('dlm-rpm-rewrite');
+    calc.dataset.dlmRpm = '$' + realRpm.toFixed(2);   // " w/DH" suffix added in CSS
+  }
+
   // ── Style the broker's email address as a tappable chip ───────────────────
   function injectEmailChip(row) {
     if (row.dataset.dlmChip) return;
     const email = getBrokerEmail(row);
     if (!email) return;
     const { origin, dest } = getCities(row);
-    if (!origin || origin.length < 3) return;
+    if (!origin || origin.length < 3 || !dest || dest.length < 3) return;
     row.dataset.dlmChip = '1';
 
     // Resolve origin/dest once at injection time — dataset takes priority,
@@ -1160,7 +1245,7 @@ if (so && ro && so !== ro) return false;
     // "stamped-before-highlighted" lockout: an early dataset stamp (the useDB block
     // below stamps dlmOrigin/dlmDest before any match, and stale state survives on a
     // reused element) can no longer convince either guard that a colorless row is done.
-    const hasTier = row.classList.contains('dlm-green')  || row.classList.contains('dlm-yellow') ||
+    const hasTier = row.classList.contains('dlm-yellow') ||
                     row.classList.contains('dlm-blue')   || row.classList.contains('dlm-purple');
 
     // Fast pre-check: a COLORED row whose content (incl. its extracted origin|dest) is
@@ -1178,7 +1263,7 @@ if (so && ro && so !== ro) return false;
     }
 
     // Row is new or DAT reused the element for different data — clear stale state.
-    row.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+    row.classList.remove('dlm-yellow', 'dlm-blue', 'dlm-purple');
     const oldBadge = row.querySelector('.dlm-badge');
     if (oldBadge) oldBadge.remove();
     row.querySelectorAll('.dlm-badge-host').forEach(el => el.classList.remove('dlm-badge-host'));
@@ -1197,11 +1282,11 @@ if (so && ro && so !== ro) return false;
       const cacheKey = `${origin}|${dest || ''}`;
       const cached = _dbMatchCache[cacheKey];
       if (cached && !useCSV) {
-        row.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+        row.classList.remove('dlm-yellow', 'dlm-blue', 'dlm-purple');
         if (cached.matchType === 'origin') {
           row.classList.add('dlm-blue');
         } else {
-          row.classList.add(cached.loadCount >= 3 ? 'dlm-green' : 'dlm-yellow');
+          row.classList.add('dlm-yellow');
         }
         row.dataset.dlmSig = _rowSig(row, origin, dest);  // colored now → safe to stamp
       }
@@ -1242,8 +1327,6 @@ if (so && ro && so !== ro) return false;
     if (sameLineBroker && sameLineBroker.length > 0) {
       cls = 'dlm-purple'; badgeCls = 'dlm-b-purple';
       badgeTxt = `🔥 ${odM.length}x · ${datBroker.split(' ')[0]}`;
-    } else if (odM.length >= 3) {
-      cls = 'dlm-green';  badgeCls = 'dlm-b-green';  badgeTxt = `✓ ${odM.length}x`;
     } else if (odM.length >= 1) {
       cls = 'dlm-yellow'; badgeCls = 'dlm-b-yellow'; badgeTxt = `✓ ${odM.length}x`;
     } else if (oM.length >= 1) {
@@ -1576,8 +1659,7 @@ if (so && ro && so !== ro) return false;
       <div style="${CARD}">
         <div style="${LABEL}">Highlight Guide</div>
         ${[['rgba(167,139,250,.3)','#a78bfa','Same lane + same broker — call immediately'],
-           ['rgba(52,199,89,.25)','#34c759','Same lane — ran 3+ times'],
-           ['rgba(251,191,36,.3)','#fbbf24','Same lane — ran 1–2 times'],
+           ['rgba(251,191,36,.3)','#fbbf24','Same lane match'],
            ['rgba(96,165,250,.3)','#60a5fa','Same pickup city + state']].map(([bg,border,label]) =>
           `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11px;color:#6e6e73">
              <div style="width:12px;height:12px;border-radius:3px;flex-shrink:0;background:${bg};border:1px solid ${border}"></div>${label}
@@ -2925,7 +3007,7 @@ if (so && ro && so !== ro) return false;
       // stagger delay. The .dlm-rec CSS animation still runs (opacity 0→1) but fires
       // immediately for every record, so the panel is never empty on first open.
       html += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-              renderRecs(odM, odM.length >= 3 ? '#34c759' : '#f5a623', 20, true, true, lk, datBroker);
+              renderRecs(odM, '#fbbf24', 20, true, true, lk, datBroker);
     }
 
     // Purple: same lane + same broker
@@ -3021,7 +3103,7 @@ if (so && ro && so !== ro) return false;
 
     if (odM.length) {
       csvHTML += `<div class="dlm-stitle">Exact Lane Matches · ${odM.length}</div>` +
-                 renderRecs(odM, odM.length >= 3 ? '#34c759' : '#f5a623', 20, true, true, lkd, datBroker);
+                 renderRecs(odM, '#fbbf24', 20, true, true, lkd, datBroker);
     }
 
     const dbLoadingHTML = `
@@ -3095,7 +3177,7 @@ if (so && ro && so !== ro) return false;
       dbHTML += `<div style="text-align:center;padding:20px;color:#aeaeb2;font-size:13px">No database data found for this lane</div>`;
     } else {
       if (result.exact) {
-        dbHTML += `<div class="dlm-sum"><div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>${renderRecs(mapLoads(result.exact.loads), '#34c759', 999, true, true, new Set(), datBroker)}</div>`;
+        dbHTML += `<div class="dlm-sum"><div style="font-size:10px;color:#fbbf24;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>${renderRecs(mapLoads(result.exact.loads), '#fbbf24', 999, true, true, new Set(), datBroker)}</div>`;
       }
       if (result.origin) {
         dbHTML += `<div class="dlm-sum" style="margin-top:8px"><div style="font-size:10px;color:#007aff;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Same Origin Loads</div>${renderRecs(mapLoads(result.origin.loads), '#007aff', 999, true, true, new Set(), datBroker)}</div>`;
@@ -3231,8 +3313,8 @@ if (so && ro && so !== ro) return false;
 
       html += `
         <div class="dlm-sum">
-          <div style="font-size:10px;color:#34c759;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>
-          ${renderRecs(mappedLoads, mappedLoads.length >= 3 ? '#34c759' : '#f5a623', 999, true, true)}
+          <div style="font-size:10px;color:#8e8e93;letter-spacing:.05em;text-transform:uppercase;margin-bottom:8px;font-weight:600">Exact Lane Matches</div>
+          ${renderRecs(mappedLoads, '#fbbf24', 999, true, true)}
         </div>`;
     }
 
@@ -3605,14 +3687,14 @@ if (so && ro && so !== ro) return false;
         matched++;
         _dbMatchCache[rawKey] = match;   // raw key — processRow & safety-net read this
         theseRows.forEach(row => {
-          const alreadyColored = ['dlm-green','dlm-yellow','dlm-blue','dlm-purple'].some(c => row.classList.contains(c));
+          const alreadyColored = ['dlm-yellow','dlm-blue','dlm-purple'].some(c => row.classList.contains(c));
           if (alreadyColored && useCSV) return;
           row.style.backgroundColor = '';
-          row.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+          row.classList.remove('dlm-yellow', 'dlm-blue', 'dlm-purple');
           if (match.matchType === 'origin') {
             row.classList.add('dlm-blue');
           } else {
-            row.classList.add(match.loadCount >= 3 ? 'dlm-green' : 'dlm-yellow');
+            row.classList.add('dlm-yellow');
           }
           row.dataset.dlmDbMatch = JSON.stringify(match);
           // Row is colored now → stamp the pre-check signature so the next scan
@@ -3640,11 +3722,29 @@ if (so && ro && so !== ro) return false;
     requestAnimationFrame(() => { _scanQueued = false; scan(); });
   }
 
+  // Horizontal on-screen test. DAT's search board is an Angular Material tab group:
+  // switching search tabs leaves the PREVIOUS tab's rows viewport mounted but translated
+  // a full window-width to the side (the stranded viewport sits at x === innerWidth), so
+  // a simple left/right intersection cleanly distinguishes the ACTIVE tab's rows from a
+  // previous tab's stranded ones. Horizontal (not vertical) on purpose: the virtual
+  // scroller renders buffer rows just above/below the visible window, so a vertical test
+  // would wrongly reject those — but tabs only ever slide sideways.
+  function _onScreenH(el) {
+    const r = el.getBoundingClientRect();
+    const W = window.innerWidth || document.documentElement.clientWidth;
+    return r.width > 0 && r.left < W && r.right > 0;
+  }
+
   // The scrollable ancestor of the load rows (DAT virtualizes inside it). Narrowing
   // the observer here cuts callback noise from unrelated page mutations. Returns
   // null when rows aren't rendered yet or no inner scroller exists → caller uses body.
+  // Picks a row in the ACTIVE (on-screen) tab so it never latches onto a stranded
+  // viewport when two tab bodies coexist after a search-tab switch.
   function findRowsScrollContainer() {
-    const row = document.querySelector('[class*="row-container"], [class*="row-cells"]');
+    const rows = document.querySelectorAll('[class*="row-container"], [class*="row-cells"]');
+    let row = null;
+    for (const r of rows) { if (_onScreenH(r)) { row = r; break; } }
+    if (!row) row = rows[0] || null;   // best-effort if none judged on-screen yet
     if (!row) return null;
     let el = row.parentElement;
     for (let i = 0; i < 12 && el && el !== document.body; i++) {
@@ -3658,11 +3758,18 @@ if (so && ro && so !== ro) return false;
   }
 
   // Point the observer at the rows' scroll container once it exists, else document.body.
-  // Re-targets if the current target was torn out (SPA navigation), so detection never
-  // goes stale. Cheap in steady state: returns early while already on a live container.
+  // Re-targets when the current target is no longer the LIVE rows container, so detection
+  // never goes stale. .isConnected is NOT sufficient: a search-tab switch swaps in a new
+  // viewport while leaving the old one connected but off-screen — a target that passes
+  // .isConnected yet is dead (its observer never fires for the new tab's rows). The cheap
+  // on-screen fast-path keeps this safe to call every scan during fast scroll.
   function ensureScanObserver() {
     if (!_scanObserver) _scanObserver = new MutationObserver(queueScan);
-    if (_scanObsTarget && _scanObsTarget.isConnected && _scanObsTarget !== document.body) return;
+    // Steady-state fast-path: keep the current target if it's still connected, not the
+    // body fallback, and still on-screen. One rect read — avoids re-walking the DOM
+    // every frame while scrolling.
+    if (_scanObsTarget && _scanObsTarget !== document.body &&
+        _scanObsTarget.isConnected && _onScreenH(_scanObsTarget)) return;
     const found = findRowsScrollContainer();
     const desired = (found && found.isConnected) ? found : document.body;
     if (desired === _scanObsTarget && desired.isConnected) return;
@@ -3675,7 +3782,15 @@ if (so && ro && so !== ro) return false;
     _cityFailCount = 0;
     ensureScanObserver();   // keep the observer pointed at the live rows container
     const usingAPI = licenseTier === 'pro' && useDB;
-    if (!odIndex && !oIndex && !usingAPI) return;
+    if (!odIndex && !oIndex && !usingAPI) {
+      // No lane-history data source — but the Target-RPM signal is independent of it,
+      // so still color $/mi on qualifying rows when a target is set (and clear stale
+      // green when it isn't). applyRpmHighlight no-ops fast when dlmTargetRpm <= 0.
+      if (dlmTargetRpm > 0) {
+        document.querySelectorAll('[class*="row-container"], [class*="row-cells"]').forEach(applyRpmHighlight);
+      }
+      return;
+    }
     // processRow skips rows whose origin/dest hasn't changed, so no bulk
     // class-removal pass is needed — stale state is cleared per-row on demand.
     const rows = document.querySelectorAll('[class*="row-container"], [class*="row-cells"]');
@@ -3691,6 +3806,7 @@ if (so && ro && so !== ro) return false;
     rows.forEach(r => {
       processRow(r);
       injectEmailChip(r);
+      applyRpmHighlight(r);   // green the $/mi text when realRpm (incl. deadhead) ≥ target
     });
     if (_cityFailCount > 50) {
       reportSelectorError('city-extraction-failed', `${_cityFailCount} rows failed city extraction in one scan`);
@@ -3700,8 +3816,8 @@ if (so && ro && so !== ro) return false;
 
   // ── Init ────────────────────────────────────────────────────────────────────
   function clearAllHighlights() {
-    document.querySelectorAll('.dlm-green, .dlm-yellow, .dlm-blue, .dlm-purple').forEach(el => {
-      el.classList.remove('dlm-green', 'dlm-yellow', 'dlm-blue', 'dlm-purple');
+    document.querySelectorAll('.dlm-yellow, .dlm-blue, .dlm-purple').forEach(el => {
+      el.classList.remove('dlm-yellow', 'dlm-blue', 'dlm-purple');
     });
     document.querySelectorAll('.dlm-badge').forEach(el => el.remove());
     document.querySelectorAll('[data-dlm-origin]').forEach(el => {
@@ -3978,7 +4094,10 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if ('dlmDriverRate' in changes) dlmDriverRate = +changes.dlmDriverRate.newValue || 0;
         if ('dlmDriverPercent' in changes) dlmDriverPercent = +changes.dlmDriverPercent.newValue || 0;
         if ('dlmDriverPayMode' in changes) dlmDriverPayMode = (changes.dlmDriverPayMode.newValue === 'percent') ? 'percent' : 'permile';
-        if ('dlmTargetRpm' in changes)  dlmTargetRpm  = +changes.dlmTargetRpm.newValue  || 0;
+        if ('dlmTargetRpm' in changes) {
+          dlmTargetRpm = +changes.dlmTargetRpm.newValue || 0;
+          scan();   // recolor visible $/mi immediately (and clear green when target cleared)
+        }
         if ('signature' in changes)   signature   = changes.signature.newValue   || '';
         if ('emailSubject' in changes)     emailSubject     = changes.emailSubject.newValue     || 'Load Inquiry – {origin} → {destination}';
         if ('emailTemplate' in changes)    emailTemplate    = changes.emailTemplate.newValue    || emailTemplate;
@@ -4019,6 +4138,19 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if (location.href !== lastUrl) {
           lastUrl = location.href;
           setTimeout(scan, 500);   // scan() re-targets the observer if the container changed
+        }
+        // Search-tab switch recovery. DAT's Material tab group swaps in a NEW rows
+        // viewport while leaving the old one connected but off-screen, stranding the
+        // narrowed MutationObserver on the dead tab → it never fires → no scan → the new
+        // tab's highlights never appear until a full reload. A tab switch does NOT change
+        // the URL, and the dead observer can't trigger the re-target itself, so detect it
+        // structurally here (off the scroll hot path): if the live rows container is no
+        // longer the one we're observing, re-target the observer and force a scan. This
+        // recovers highlights within ≤700ms of the switch.
+        const live = findRowsScrollContainer();
+        if (live && live !== _scanObsTarget) {
+          ensureScanObserver();
+          scan();
         }
       }, 700);
 
@@ -4424,11 +4556,19 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         const dh = parseFloat(milesFromChip(refEl)) || 0;   // deadhead, synchronous + free
         _dh = dh;
         const { origin, dest } = getDetailCities(refEl);
-        let tripMiles = await cachedMiles(origin, dest);  // 1. routeCache HIT — instant/free
-        if (tripMiles == null) {                          // 2. DAT's on-page "Trip … mi" —
-          tripMiles = getDetailTripMiles(refEl);          //    free/instant, no proxy
+        // SOURCE OF TRUTH = DAT's posted Trip — the SAME value the board's green signal
+        // uses (getRowTripMiles) — so the box RPM and the board RPM can never disagree on
+        // the same load, and the figure doesn't change when the user opens it. Prefer the
+        // row Trip cell (board's reader), then DAT's detail "Trip … mi"; fall back to
+        // cached/route miles ONLY when DAT posts no Trip at all.
+        let tripMiles = tripFromChip(refEl);              // 1. DAT row Trip cell (= board)
+        if (!tripMiles || tripMiles <= 0) {
+          tripMiles = getDetailTripMiles(refEl);          // 2. DAT detail "Trip … mi"
         }
-        if (tripMiles == null || tripMiles <= 0) {        // 3. proxy fetch — current behavior
+        if (tripMiles == null || tripMiles <= 0) {        // 3. routeCache HIT — instant/free
+          tripMiles = await cachedMiles(origin, dest);
+        }
+        if (tripMiles == null || tripMiles <= 0) {        // 4. proxy fetch — last resort
           _milesState = 'loading'; compute();
           tripMiles = await fetchMiles(origin, dest);
         }
@@ -4459,6 +4599,7 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
             targetInput.value = dlmTargetRpm > 0 ? dlmTargetRpm : '';
             compute();
           }
+          scan();   // recolor visible $/mi immediately (and clear green when target cleared)
         }
       }
       chrome.storage.onChanged.addListener(onTgtChange);

@@ -5,8 +5,6 @@
 /* ── Row highlights — table and card views ───────────────────── */
 [class*="row-container"].dlm-purple,
 [class*="row-cells"].dlm-purple  { background:rgba(167,139,250,.18)!important; border-left:none!important; box-shadow:inset 4px 0 0 0 #a78bfa, inset 8px 0 14px rgba(167,139,250,.35)!important; animation:dlmPulse 1.8s infinite; cursor:pointer !important; }
-[class*="row-container"].dlm-green,
-[class*="row-cells"].dlm-green   { background:rgba(74,222,128,.14)!important;  border-left:none!important; box-shadow:inset 4px 0 0 0 #4ade80, inset 8px 0 12px rgba(74,222,128,.25)!important; cursor:pointer !important; }
 [class*="row-container"].dlm-yellow,
 [class*="row-cells"].dlm-yellow  { background:rgba(251,191,36,.14)!important;  border-left:none!important; box-shadow:inset 4px 0 0 0 #fbbf24, inset 8px 0 12px rgba(251,191,36,.25)!important; cursor:pointer !important; }
 /* Blue (origin-only): mark ONLY the Age|Rate cell boundary; never touch DAT's row coloring.
@@ -17,10 +15,41 @@
 [class*="row-container"].dlm-blue .cell-rate,
 [class*="row-cells"].dlm-blue .cell-rate { box-shadow:inset 3px 0 0 0 #0046e0 !important; }
 
+/* Target-RPM signal — applyRpmHighlight lights rows whose REAL (deadhead-inclusive)
+   rate-per-mile meets/beats the user's Target $/mi. All textContent-safe (so the
+   v1.41/v1.42 _rowSig is byte-unchanged): a green tint on the AGE + RATE cells + a
+   right-edge green stripe + our "$X.XX w/DH" figure rendered via a ::after overlay. */
+/* Green tint on just the AGE + RATE cells (adjacent at the row's left → one contiguous
+   green block), in DAT's native green (#00ba00) at .14 — same opacity as the .dlm-yellow
+   match tint, so the two cells read clearly green without washing the whole row. Driven by
+   the row's .dlm-rpm-on class (also used for the right stripe); the row itself is untinted. */
+/* On-target RIGHT stripe — a MIRROR of DAT's native green LEFT stripe, on the right edge:
+   same 4px width and the exact same green (#00ba00) at full saturation. Lives on .cell-rate
+   (row-level class, like .dlm-blue). Class-only → row.textContent / _rowSig byte-unchanged.
+   DAT's native green left stripe is a separate background-filled element (not .cell-rate,
+   not a box-shadow), so it coexists with this automatically — no combination needed there. */
+[class*="row-container"].dlm-rpm-on .cell-rate,
+[class*="row-cells"].dlm-rpm-on .cell-rate { box-shadow:inset -4px 0 0 0 #00ba00, inset -8px 0 12px rgba(0,186,0,.25) !important; }
+/* Both origin-match (.dlm-blue, left) AND on-target (right): combine the shadows so BOTH
+   show. A single box-shadow declaration would overwrite the other (equal specificity); this
+   rule's higher specificity (.dlm-blue.dlm-rpm-on) wins and paints left blue + right green. */
+[class*="row-container"].dlm-blue.dlm-rpm-on .cell-rate,
+[class*="row-cells"].dlm-blue.dlm-rpm-on .cell-rate { box-shadow:inset 3px 0 0 0 #0046e0, inset -4px 0 0 0 #00ba00, inset -8px 0 12px rgba(0,186,0,.25) !important; }
+/* Hide DAT's $/mi span — display:none keeps it in textContent, so the row signature
+   never shifts. (The total $ amount in .offer is untouched.) */
+.dlm-rpm-rewrite > span { display:none !important; }
+/* Our honest figure in the same slot: "$2.58 w/DH" (no "*" — it's exact; "/mi" implied
+   by the Rate/mile column). The number text stays DAT's native muted $/mi color (#636d79),
+   10px/14px weight 600 — the signal is the calm tint, not loud text. Single ::after so
+   row.textContent (and _rowSig) stays unchanged. */
+.dlm-rpm-rewrite::after {
+  content: attr(data-dlm-rpm) " w/DH";
+  display:block; color:#1d7a3e; font-weight:600; font-size:10px; line-height:14px;
+  white-space:nowrap;
+}
+
 [class*="row-container"].dlm-purple:hover,
 [class*="row-cells"].dlm-purple:hover  { background:rgba(167,139,250,.28)!important; }
-[class*="row-container"].dlm-green:hover,
-[class*="row-cells"].dlm-green:hover   { background:rgba(74,222,128,.22)!important; }
 [class*="row-container"].dlm-yellow:hover,
 [class*="row-cells"].dlm-yellow:hover  { background:rgba(251,191,36,.22)!important; }
 
@@ -125,6 +154,7 @@
   font-size:12px !important; font-weight:700 !important; letter-spacing:-.01em !important;
   font-family:-apple-system,'SF Pro Text',BlinkMacSystemFont,system-ui,sans-serif !important;
   cursor:pointer !important; white-space:nowrap !important;
+  width:fit-content !important;
   text-decoration:none !important; user-select:none !important;
   line-height:1.2 !important; vertical-align:middle !important;
   box-shadow:0 2px 8px rgba(0,102,255,.35) !important;

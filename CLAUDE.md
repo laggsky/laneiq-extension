@@ -32,9 +32,10 @@
 ---
 
 ## Current Version
-- Manifest: 1.41
-- Chrome Store target: v1.41 (fix rows staying unhighlighted until refresh — pre-check stamped dlmSig before the row was actually highlighted; hasTier-gated skip guards so a colorless row is always retried, collision-proof city-aware _rowSig, dlmSig stamped only once a tier class is applied)
-- v1.40 (live, public): Blue origin-tier stripe at Age|Rate cell boundary, rAF-coalesced scroll re-highlight, trip-miles parse fix, click-BEST scroll+highlight, device-limited activation
+- Manifest: 1.42
+- Chrome Store target: v1.42 (fix highlights disappearing on SEARCH-TAB switch — DAT's Angular Material tab group swaps in a new rows viewport while leaving the old one connected-but-offscreen, stranding the narrowed MutationObserver; ensureScanObserver now re-targets when the observed node is no longer the LIVE on-screen rows container, findRowsScrollContainer prefers the visible viewport, and the 700ms interval re-checks + re-targets + rescans on tab switch since the URL never changes)
+- v1.41 (live, public): fix rows staying unhighlighted until refresh — pre-check stamped dlmSig before highlight; hasTier-gated skip guards, collision-proof city-aware _rowSig, dlmSig stamped only on tier apply
+- v1.40: Blue origin-tier stripe at Age|Rate cell boundary, rAF-coalesced scroll re-highlight, trip-miles parse fix, click-BEST scroll+highlight, device-limited activation
 - Last submitted to store: v1.38 (June 10 2026 — UNDER REVIEW; do not touch that submission)
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
