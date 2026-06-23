@@ -3531,7 +3531,7 @@ if (so && ro && so !== ro) return false;
                      ? '$' + rateNum.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })
                      : (rate && rate !== 'nan' ? rate : 'N/A');
       const ln   = String(r.loadNum||'').replace(/\n.*/,'').trim() || '—';
-      const dt   = String(r.puDate||'').split('T')[0].substring(0, 10);
+      const dt   = String(r.puDate||'').split('T')[0];
       const broker = String(r.broker||'').trim();
       // Exactly ONE mail button — the ACTIVE provider, when configured. Mutually
       // exclusive (never both). Same DB-only guard + load# check.
