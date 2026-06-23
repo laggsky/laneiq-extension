@@ -27,6 +27,7 @@
   // ── State ───────────────────────────────────────────────────────────────────
   let odIndex = null, oIndex = null, brokerIndex = null;
   let _cityCoords = null; // "city, st" -> [lat,lng]; loaded once from city_coords.json
+  let _acCities = null;   // [{d:"City, ST", c:"city", s:"st"}] — autocomplete source built from _cityCoords
   let emailSubject = '', emailTemplate = '', senderGmailIndex = 0;
   let gmailOAuthEmail = '';
   let outlookOAuthEmail = '';
@@ -329,6 +330,7 @@
       const resp = await fetch(chrome.runtime.getURL('city_coords.json'));
       _cityCoords = await resp.json();
       console.log('[LaneIQ] city_coords loaded:', Object.keys(_cityCoords).length, 'cities');
+      buildAcCities();
     } catch (e) {
       console.error('[LaneIQ] city_coords load failed:', e.message);
       _cityCoords = {};
@@ -430,6 +432,83 @@
       return a._dGap - b._dGap;
     });
     return deduped;
+  }
+
+  // ── City autocomplete for Lane Lookup FROM / TO inputs ─────────────────────
+  let _acDrop = null, _acIdx = -1, _acInput = null, _acBlurTimer = 0;
+
+  function buildAcCities() {
+    if (_acCities || !_cityCoords) return;
+    _acCities = Object.keys(_cityCoords).map(k => {
+      const i = k.lastIndexOf(', ');
+      const city = k.slice(0, i);
+      const state = k.slice(i + 2);
+      const display = city.replace(/\b\w/g, ch => ch.toUpperCase()) + ', ' + state.toUpperCase();
+      return { d: display, c: city, s: state };
+    });
+    _acCities.sort((a, b) => a.c < b.c ? -1 : a.c > b.c ? 1 : a.s < b.s ? -1 : a.s > b.s ? 1 : 0);
+  }
+
+  function acSearch(q) {
+    if (!_acCities || q.length < 2) return [];
+    q = q.toLowerCase().trim();
+    const pre = [], sub = [];
+    for (const c of _acCities) {
+      if (pre.length >= 6 && sub.length >= 6) break;
+      if (c.c.startsWith(q) || (c.c + ', ' + c.s).startsWith(q)) {
+        if (pre.length < 6) pre.push(c);
+      } else if (c.c.includes(q)) {
+        if (sub.length < 6) sub.push(c);
+      }
+    }
+    const out = pre.slice(0, 6);
+    for (const c of sub) { if (out.length >= 6) break; out.push(c); }
+    return out;
+  }
+
+  function acShow(input, matches) {
+    acHide();
+    if (!matches.length) return;
+    const row = input.closest('.dlm-radius-row');
+    if (!row) return;
+    _acInput = input;
+    _acIdx = -1;
+    _acDrop = document.createElement('div');
+    _acDrop.className = 'dlm-ac-dropdown';
+    matches.forEach((m, i) => {
+      const el = document.createElement('div');
+      el.className = 'dlm-ac-item';
+      el.textContent = m.d;
+      el.dataset.val = m.d;
+      el.dataset.idx = i;
+      _acDrop.appendChild(el);
+    });
+    row.appendChild(_acDrop);
+    const rr = row.getBoundingClientRect();
+    const ir = input.getBoundingClientRect();
+    _acDrop.style.left = (ir.left - rr.left) + 'px';
+    _acDrop.style.width = ir.width + 'px';
+  }
+
+  function acHide() {
+    if (_acDrop) { _acDrop.remove(); _acDrop = null; }
+    _acIdx = -1; _acInput = null;
+  }
+
+  function acHighlight(idx) {
+    if (!_acDrop) return;
+    const items = _acDrop.children;
+    for (let i = 0; i < items.length; i++) items[i].classList.toggle('dlm-ac-active', i === idx);
+    _acIdx = idx;
+    if (items[idx]) items[idx].scrollIntoView({ block: 'nearest' });
+  }
+
+  function acSelect(val) {
+    if (_acInput) {
+      _acInput.value = val;
+      _acInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    acHide();
   }
 
   // Build the entire Lane Lookup section HTML (controls + summary + cards).
@@ -2939,9 +3018,53 @@ if (so && ro && so !== ro) return false;
         paintSliderFill(e.target);
       }
 
+      if (isCity) {
+        const q = e.target.value.trim();
+        const matches = acSearch(q);
+        if (matches.length) acShow(e.target, matches);
+        else acHide();
+      }
+
       clearTimeout(_radiusTimer);
       _radiusTimer = setTimeout(runRadiusUpdate, isSlider ? 100 : 300);
     });
+
+    d.querySelector('#dlm-body').addEventListener('keydown', e => {
+      if (!e.target.classList.contains('dlm-r-city') || !_acDrop) return;
+      const items = _acDrop.children;
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        acHighlight((_acIdx + 1) % items.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        acHighlight((_acIdx - 1 + items.length) % items.length);
+      } else if (e.key === 'Enter' && _acIdx >= 0 && items[_acIdx]) {
+        e.preventDefault();
+        acSelect(items[_acIdx].dataset.val);
+      } else if (e.key === 'Escape') {
+        acHide();
+      }
+    });
+
+    d.querySelector('#dlm-body').addEventListener('mousedown', e => {
+      const item = e.target.closest('.dlm-ac-item');
+      if (item) { e.preventDefault(); acSelect(item.dataset.val); }
+    });
+
+    d.querySelector('#dlm-body').addEventListener('focusout', e => {
+      if (e.target.classList.contains('dlm-r-city')) {
+        clearTimeout(_acBlurTimer);
+        _acBlurTimer = setTimeout(acHide, 150);
+      }
+    }, true);
+
+    d.querySelector('#dlm-body').addEventListener('focusin', e => {
+      if (e.target.classList.contains('dlm-r-city')) {
+        clearTimeout(_acBlurTimer);
+        const q = e.target.value.trim();
+        if (q.length >= 2) acShow(e.target, acSearch(q));
+      }
+    }, true);
 
     return d;
   }
@@ -3926,115 +4049,20 @@ if (so && ro && so !== ro) return false;
     licenseKey  = lic.licenseKey || '';
     const usingAPI = licenseTier === 'pro' && useDB;
 
-    // CSV gate — skip index loading if no active data source, but always build and
-    // show the panel so the user can reach the Setup tab to re-enable a source.
-    // Corrupted or missing storage values are treated the same as "both off".
-    if (!s.laneCount && !usingAPI) {
-      const _disabledMsg = '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Enable a data source in settings to see rates</div>';
-      panelPopped = s.panelPopped || false;
-      if (!panelPopped) {
-        if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
-        panel.style.display = 'flex';
-        if (_activeTab === 'history') switchTab('history');
-        const _disabledBody = document.getElementById('dlm-body');
-        // Defense-in-depth: if a re-init fires while the user is on the Setup tab,
-        // preserve the Setup UI (file list / dropzone / toggles) instead of blanking
-        // the body with the empty-source message.
-        if (_disabledBody) {
-          if (_activeTab === 'setup') renderSetupBody(_disabledBody);
-          else _disabledBody.innerHTML = _disabledMsg;
-        }
-      }
-      _initialized = true;
-      return;
-    }
-
-    // Only validate/load CSV indexes when CSV data is present
-    if (s.laneCount) {
-      if (s.indexVersion !== INDEX_VERSION) {
-        console.warn('[LaneIQ] Stored index version', s.indexVersion, '!== current', INDEX_VERSION, '— skipping stale index. Re-upload CSV in the extension popup.');
-        return;
-      }
-      odIndex     = s.odIndex     || {};
-      oIndex      = s.oIndex      || {};
-      brokerIndex = s.brokerIndex || {};
-    }
-
-    // v1.32 radius matching — load bundled coords + log real-world coverage (dev aid)
-    await loadCityCoords();
-    logCoordCoverage();
-
-    gmailIndex       = s.gmailIndex      || 0;
-    gmailOAuthEmail  = s.gmailOAuthEmail || '';
-    outlookOAuthEmail = s.outlookOAuthEmail || '';
-    senderGmailIndex = typeof s.senderGmailIndex !== 'undefined' ? s.senderGmailIndex : 0;
-    signature        = s.signature    || '';
-    emailSubject     = s.emailSubject  || 'Load Inquiry – {origin} → {destination}';
-    emailTemplate    = s.emailTemplate || `Hi,
-
-Please tell me more about your load from {origin}, pickup on {date}, going to {destination}, posted on DAT today.
-
-{signature}`;
-
-    if (s.panelPopped) {
-      chrome.runtime.sendMessage({ type: 'checkPanelWindow' }, (res) => {
-        if (res?.exists) {
-          panelPopped = true;
-          // detached panel is still open — don't show inline panel
-        } else {
-          panelPopped = false;
-          chrome.storage.local.set({ panelPopped: false });
-          if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
-          panel.style.display = 'flex';
-          if (_activeTab === 'history') switchTab('history');
-        }
-      });
-    } else {
-      panelPopped = false;
-      if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
-      panel.style.display = 'flex';
-      if (_activeTab === 'history') switchTab('history');
-    }
-    // Restore the floating RPM/route window flag. The route modal isn't built on
-    // load, so just reconcile the flag with the real window: if the window is gone
-    // (stale flag after a crash/close), clear it so a fresh RPM click opens inline.
-    if (s.routePopped) {
-      chrome.runtime.sendMessage({ type: 'checkRouteWindow' }, (res) => {
-        routePopped = !!res?.exists;
-        if (!routePopped) chrome.storage.local.set({ routePopped: false });
-      });
-    } else {
-      routePopped = false;
-    }
-    // Adopt any existing routeCommand nonce so a stale command left in storage is
-    // never re-applied on the first onChanged that happens to carry it.
-    _routeCmdNonce = s.routeCommand?.nonce || null;
-    // Likewise adopt the last routeClosed token so a stale close (from a previous
-    // session) never tears down a freshly-built modal on first onChanged.
-    _routeClosedNonce = s.routeClosed || null;
-    mapsApiKey     = s.mapsApiKey     || '';
-    dlmMpg         = +s.dlmMpg         || 6.5;
-    dlmFuelPrice   = +s.dlmFuelPrice   || 3.89;
-    dlmDriverRate  = +s.dlmDriverRate  || 0;
+    // Target-RPM and calculator-box settings are independent of lane-history data,
+    // so load them before the no-data-source early return.
+    dlmTargetRpm     = +s.dlmTargetRpm     || 0;
+    mapsApiKey       = s.mapsApiKey        || '';
+    dlmMpg           = +s.dlmMpg           || 6.5;
+    dlmFuelPrice     = +s.dlmFuelPrice     || 3.89;
+    dlmDriverRate    = +s.dlmDriverRate    || 0;
     dlmDriverPercent = +s.dlmDriverPercent || 0;
     dlmDriverPayMode = (s.dlmDriverPayMode === 'percent') ? 'percent' : 'permile';
-    dlmTargetRpm   = +s.dlmTargetRpm   || 0;
-    lovedLoads          = s.lovedLoads      || {};
-    gmailEmail          = s.gmailEmail      || '';
-    outlookEmail        = s.outlookEmail    || '';
-    outlookConfigured   = !!s.outlookConfigured;
-    outlookHost         = s.outlookHost     || 'office.com';
-    activeMailProvider  = s.activeMailProvider || '';
-    filesMeta           = s.filesMeta       || [];
-    emailTemplates      = s.emailTemplates  || DEFAULT_TEMPLATES.map(t => ({...t}));
-    activeTemplateIndex = s.activeTemplate  ?? 0;
-    // Migrate old template names if user has the previous defaults saved
-    const nameMap = { 'Template 1': 'Standard', 'Template 2': 'Follow Up', 'Template 3': 'Custom' };
-    let migrated = false;
-    emailTemplates.forEach(t => { if (nameMap[t.name]) { t.name = nameMap[t.name]; migrated = true; } });
-    if (migrated) chrome.storage.local.set({ emailTemplates });
-    _initialized = true;
 
+    // One-time observers, scan loop, route interceptor, storage.onChanged listener.
+    // Runs on the FIRST _doInit() call only (_observersSetup is never reset).
+    // Placed before the no-data-source gate so the scan loop, target-RPM signal,
+    // calculator box, and re-init listener work even without CSV/DB data.
     if (!_observersSetup) {
       _observersSetup = true;
 
@@ -4163,6 +4191,108 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if (row) _lastClickedRow = row;
       }, true);
     }
+
+    // CSV gate — skip index loading if no active data source, but always build and
+    // show the panel so the user can reach the Setup tab to re-enable a source.
+    // Corrupted or missing storage values are treated the same as "both off".
+    if (!s.laneCount && !usingAPI) {
+      const _disabledMsg = '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Enable a data source in settings to see rates</div>';
+      panelPopped = s.panelPopped || false;
+      if (!panelPopped) {
+        if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
+        panel.style.display = 'flex';
+        if (_activeTab === 'history') switchTab('history');
+        const _disabledBody = document.getElementById('dlm-body');
+        // Defense-in-depth: if a re-init fires while the user is on the Setup tab,
+        // preserve the Setup UI (file list / dropzone / toggles) instead of blanking
+        // the body with the empty-source message.
+        if (_disabledBody) {
+          if (_activeTab === 'setup') renderSetupBody(_disabledBody);
+          else _disabledBody.innerHTML = _disabledMsg;
+        }
+      }
+      _initialized = true;
+      return;
+    }
+
+    // Only validate/load CSV indexes when CSV data is present
+    if (s.laneCount) {
+      if (s.indexVersion !== INDEX_VERSION) {
+        console.warn('[LaneIQ] Stored index version', s.indexVersion, '!== current', INDEX_VERSION, '— skipping stale index. Re-upload CSV in the extension popup.');
+        return;
+      }
+      odIndex     = s.odIndex     || {};
+      oIndex      = s.oIndex      || {};
+      brokerIndex = s.brokerIndex || {};
+    }
+
+    // v1.32 radius matching — load bundled coords + log real-world coverage (dev aid)
+    await loadCityCoords();
+    logCoordCoverage();
+
+    gmailIndex       = s.gmailIndex      || 0;
+    gmailOAuthEmail  = s.gmailOAuthEmail || '';
+    outlookOAuthEmail = s.outlookOAuthEmail || '';
+    senderGmailIndex = typeof s.senderGmailIndex !== 'undefined' ? s.senderGmailIndex : 0;
+    signature        = s.signature    || '';
+    emailSubject     = s.emailSubject  || 'Load Inquiry – {origin} → {destination}';
+    emailTemplate    = s.emailTemplate || `Hi,
+
+Please tell me more about your load from {origin}, pickup on {date}, going to {destination}, posted on DAT today.
+
+{signature}`;
+
+    if (s.panelPopped) {
+      chrome.runtime.sendMessage({ type: 'checkPanelWindow' }, (res) => {
+        if (res?.exists) {
+          panelPopped = true;
+          // detached panel is still open — don't show inline panel
+        } else {
+          panelPopped = false;
+          chrome.storage.local.set({ panelPopped: false });
+          if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
+          panel.style.display = 'flex';
+          if (_activeTab === 'history') switchTab('history');
+        }
+      });
+    } else {
+      panelPopped = false;
+      if (!panel) { panel = buildPanel(); if (s['dlm-panel-height']) panel.style.height = s['dlm-panel-height']; }
+      panel.style.display = 'flex';
+      if (_activeTab === 'history') switchTab('history');
+    }
+    // Restore the floating RPM/route window flag. The route modal isn't built on
+    // load, so just reconcile the flag with the real window: if the window is gone
+    // (stale flag after a crash/close), clear it so a fresh RPM click opens inline.
+    if (s.routePopped) {
+      chrome.runtime.sendMessage({ type: 'checkRouteWindow' }, (res) => {
+        routePopped = !!res?.exists;
+        if (!routePopped) chrome.storage.local.set({ routePopped: false });
+      });
+    } else {
+      routePopped = false;
+    }
+    // Adopt any existing routeCommand nonce so a stale command left in storage is
+    // never re-applied on the first onChanged that happens to carry it.
+    _routeCmdNonce = s.routeCommand?.nonce || null;
+    // Likewise adopt the last routeClosed token so a stale close (from a previous
+    // session) never tears down a freshly-built modal on first onChanged.
+    _routeClosedNonce = s.routeClosed || null;
+    lovedLoads          = s.lovedLoads      || {};
+    gmailEmail          = s.gmailEmail      || '';
+    outlookEmail        = s.outlookEmail    || '';
+    outlookConfigured   = !!s.outlookConfigured;
+    outlookHost         = s.outlookHost     || 'office.com';
+    activeMailProvider  = s.activeMailProvider || '';
+    filesMeta           = s.filesMeta       || [];
+    emailTemplates      = s.emailTemplates  || DEFAULT_TEMPLATES.map(t => ({...t}));
+    activeTemplateIndex = s.activeTemplate  ?? 0;
+    // Migrate old template names if user has the previous defaults saved
+    const nameMap = { 'Template 1': 'Standard', 'Template 2': 'Follow Up', 'Template 3': 'Custom' };
+    let migrated = false;
+    emailTemplates.forEach(t => { if (nameMap[t.name]) { t.name = nameMap[t.name]; migrated = true; } });
+    if (migrated) chrome.storage.local.set({ emailTemplates });
+    _initialized = true;
 
   }
 

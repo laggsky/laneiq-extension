@@ -455,7 +455,13 @@ html body [data-dlm-route-ok]:active {
 .dlm-radius-box { background:#fff; border-radius:14px; padding:12px 14px; margin:0 0 4px; box-shadow:0 1px 4px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04); }
 .dlm-radius-controls { display:flex; flex-direction:column; gap:9px; }
 #dlm-radius-results { border-top:1px solid rgba(0,0,0,.07); margin-top:12px; padding-top:12px; }
-.dlm-radius-row { display:flex; align-items:center; gap:9px; }
+.dlm-radius-row { display:flex; align-items:center; gap:9px; position:relative; }
+.dlm-ac-dropdown { position:absolute; top:100%; right:0; z-index:9999; background:#fff; border:1px solid rgba(0,0,0,.1); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.1),0 1px 4px rgba(0,0,0,.06); margin-top:2px; overflow-y:auto; max-height:210px; }
+.dlm-ac-item { padding:7px 10px; font-size:12px; font-weight:500; color:#1d1d1f; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dlm-ac-item:hover,.dlm-ac-item.dlm-ac-active { background:rgba(0,88,224,.08); color:#0058e0; }
+.dlm-ac-item:first-child { border-radius:8px 8px 0 0; }
+.dlm-ac-item:last-child { border-radius:0 0 8px 8px; }
+.dlm-ac-item:only-child { border-radius:8px; }
 .dlm-r-tag { font-size:10px; font-weight:600; color:#aeaeb2; text-transform:uppercase; letter-spacing:.05em; flex-shrink:0; width:74px; }
 .dlm-r-city { flex:1; min-width:0; background:rgba(0,0,0,.05); border:1px solid transparent; border-radius:8px; color:#1d1d1f; font-size:12px; font-weight:500; padding:6px 9px; font-family:inherit; outline:none; transition:background .15s,box-shadow .15s,border-color .15s; }
 .dlm-r-city:focus { background:#fff; border-color:#0058e0; box-shadow:0 0 0 3px rgba(0,88,224,.14); }
