@@ -920,11 +920,11 @@ if (so && ro && so !== ro) return false;
   }
 
   // Brief floating message anchored to a chip when no send method is configured.
-  function showSetupMsg(anchorEl) {
+  function showSetupMsg(anchorEl, msg = 'Connect Gmail or Outlook first') {
     document.querySelector('.dlm-setup-msg')?.remove();
     const tip = document.createElement('div');
     tip.className = 'dlm-setup-msg';
-    tip.textContent = 'Connect Gmail or Outlook first';
+    tip.textContent = msg;
     tip.style.cssText = 'position:fixed;z-index:2147483647;background:#1d1d1f;color:#fff;' +
       'font:600 11px/1.35 -apple-system,sans-serif;padding:7px 10px;border-radius:8px;' +
       'max-width:230px;box-shadow:0 4px 14px rgba(0,0,0,.25)';
@@ -1176,7 +1176,27 @@ if (so && ro && so !== ro) return false;
     const onClick = async e => {
       e.stopPropagation(); e.preventDefault();
       const chip = e.currentTarget;
-      const ok = await sendEmail(email, chip.dataset.emailOrigin || '', chip.dataset.emailDest || '', chip.dataset.emailDate || '', milesFromChip(chip));
+
+      // Re-resolve origin/dest/date FRESH from the live row at click time. DAT/Angular
+      // can strip the chip's stamped data-email* attrs after a re-render while leaving
+      // this listener attached — that path otherwise sends a blank-lane email. The
+      // stamped dataset values are now only a fallback when the live read fails.
+      const liveRow = chip.closest('[class*="row-container"], [class*="row-cells"]');
+      const fresh   = liveRow ? getCities(liveRow) : { origin: '', dest: '' };
+      const dateM   = liveRow && (liveRow.textContent || '').match(/\b(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\b/);
+
+      const liveOrigin = (fresh.origin && fresh.origin.length >= 3) ? fresh.origin : (chip.dataset.emailOrigin || '');
+      const liveDest   = (fresh.dest   && fresh.dest.length   >= 3) ? fresh.dest   : (chip.dataset.emailDest   || '');
+      const liveDate   = dateM ? dateM[1] : (chip.dataset.emailDate || '');
+
+      // Safety net: NEVER send a blank-lane email. If neither the live read nor the
+      // stamped fallback yields an origin AND a dest, bail with an inline nudge.
+      if (!liveOrigin || !liveDest) {
+        showSetupMsg(chip, 'Couldn’t read load info — click the load row first.');
+        return;
+      }
+
+      const ok = await sendEmail(email, liveOrigin, liveDest, liveDate, milesFromChip(chip));
       if (ok) flashChipSent(chip); else showSetupMsg(chip);
     };
 
