@@ -1,6 +1,26 @@
 // ─── License key validation ───────────────────────────────────────────────────
 const VALIDATION_URL = 'https://laneiq-backend-production.up.railway.app/validate';
+const TEAM_VALIDATION_URL = 'https://laneiq-backend-production.up.railway.app/validate-team';
 const LICENSE_GRACE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// True when a key is a Team-plan key (manager LANEIQ-TEAM-MGR-… or dispatcher
+// LANEIQ-TEAM-…). Team keys route to /validate-team where seats are enforced.
+function isTeamKey(key) {
+  return /^LANEIQ-TEAM/i.test((key || '').trim());
+}
+
+// Map a /validate-team failure reason to friendly UI text.
+function teamReasonText(reason, deviceLimit) {
+  switch (reason) {
+    case 'seat_limit_reached': return 'Team is full (all seats used)';
+    case 'device_limit':       return `This person is already on ${deviceLimit || 2} devices`;
+    case 'not_team_key':       return 'Not a valid team key';
+    case 'invalid_key':        return 'Invalid or inactive key';
+    case 'missing_fields':     return 'Key and email required';
+    case 'missing_email':      return 'Email required for team activation';
+    default:                   return 'Invalid key — check your key and try again.';
+  }
+}
 
 // Stable per-install device id (privacy-friendly UUID, no fingerprinting).
 // Created once and reused; shared across all extension contexts via storage.local.
@@ -12,11 +32,45 @@ async function getDeviceId() {
   return id;
 }
 
-async function validateLicenseKey(key, forceRefresh = false) {
+async function validateLicenseKey(key, forceRefresh = false, email = '') {
   if (!key || typeof key !== 'string' || !key.trim()) {
     return { valid: false, cached: false };
   }
   const trimmedKey = key.trim();
+
+  // Team keys take a separate path — /validate-team enforces seats and REQUIRES
+  // an email. Always live (no offline cache): seat state can change server-side.
+  if (isTeamKey(trimmedKey)) {
+    const normEmail = (email || '').trim().toLowerCase();
+    if (!normEmail) return { valid: false, cached: false, tier: null, reason: 'missing_email' };
+    try {
+      const deviceId = await getDeviceId();
+      const resp = await fetch(TEAM_VALIDATION_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: trimmedKey, email: normEmail, deviceId }),
+      });
+      const data = await resp.json();
+      if (data.valid) {
+        await chrome.storage.local.set({
+          licenseKey: trimmedKey,
+          licenseValid: true,
+          licenseCheckedAt: new Date().toISOString(),
+          licenseTier: 'team',
+          teamId: data.team_id || null,
+          teamEmail: normEmail,
+          teamRole: data.team_role || null,
+          seatLimit: data.seat_limit ?? null,
+          seatsUsed: data.seats_used ?? null,
+        });
+        return { valid: true, cached: false, tier: 'team', teamRole: data.team_role || null };
+      }
+      await chrome.storage.local.set({ licenseValid: false });
+      return { valid: false, cached: false, tier: null, reason: data.reason || null, deviceLimit: data.deviceLimit || null };
+    } catch {
+      return { valid: false, cached: false, tier: null };
+    }
+  }
 
   const stored = await chrome.storage.local.get(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier']);
   const cachedKey   = stored.licenseKey;
@@ -86,25 +140,51 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const activationBtn    = document.getElementById('activation-activate-btn');
     const activationInput  = document.getElementById('activation-key-input');
     const activationStatus = document.getElementById('activation-status');
+    const activationEmailWrap  = document.getElementById('activation-email-wrap');
+    const activationEmailInput = document.getElementById('activation-email-input');
+    // Reveal the email field as soon as a team key is typed.
+    function revealEmail(msg) {
+      if (activationEmailWrap) activationEmailWrap.style.display = 'block';
+      if (msg) { activationStatus.textContent = msg; activationStatus.style.color = '#ff9500'; }
+    }
+    activationInput.addEventListener('input', () => {
+      if (isTeamKey(activationInput.value)) revealEmail('');
+    });
     async function attemptActivation() {
       const key = activationInput.value.trim();
       if (!key) { activationStatus.textContent = 'Please enter a license key.'; return; }
+      const email = activationEmailInput ? activationEmailInput.value.trim() : '';
+      // Team key with no email yet → reveal field and stop (don't hit the server).
+      if (isTeamKey(key) && !email) { revealEmail('Email required for team activation'); return; }
       activationBtn.textContent = 'Checking...';
       activationBtn.disabled = true;
+      activationStatus.style.color = '#ff3b30';
       activationStatus.textContent = '';
-      const result = await validateLicenseKey(key, true);
+      const result = await validateLicenseKey(key, true, email);
       if (result.valid) {
         window.location.reload();
       } else {
-        activationStatus.textContent = result.reason === 'device_limit'
-          ? `This license is already active on ${result.deviceLimit || 3} devices. Contact support@laneiq.org to reset a device.`
-          : 'Invalid key — check your key and try again.';
         activationBtn.textContent = 'Activate';
         activationBtn.disabled = false;
+        // Self-correct: a team key pasted into the normal flow → reveal email, retry.
+        if (result.reason === 'use_team_validation' || result.reason === 'missing_email') {
+          revealEmail(result.reason === 'missing_email'
+            ? 'Email required for team activation'
+            : 'This is a team key — please enter your email');
+          return;
+        }
+        if (isTeamKey(key)) {
+          activationStatus.textContent = teamReasonText(result.reason, result.deviceLimit);
+        } else {
+          activationStatus.textContent = result.reason === 'device_limit'
+            ? `This license is already active on ${result.deviceLimit || 3} devices. Contact support@laneiq.org to reset a device.`
+            : 'Invalid key — check your key and try again.';
+        }
       }
     }
     activationBtn.addEventListener('click', attemptActivation);
     activationInput.addEventListener('keydown', e => { if (e.key === 'Enter') attemptActivation(); });
+    activationEmailInput?.addEventListener('keydown', e => { if (e.key === 'Enter') attemptActivation(); });
     return;
   }
 
@@ -181,7 +261,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     });
 
     document.getElementById('licenseClear').addEventListener('click', async () => {
-      await chrome.storage.local.remove(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier', 'useCSV', 'useDB']);
+      await chrome.storage.local.remove(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier', 'useCSV', 'useDB', 'teamId', 'teamEmail', 'teamRole', 'seatLimit', 'seatsUsed', 'useTeam']);
       licenseInput.value = '';
       licenseInput.placeholder = 'LANEIQ-XXXX-XXXX-XXXX';
       licenseStatus.textContent = 'License cleared';
@@ -191,18 +271,39 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       }, 1500);
     });
 
+    const licenseEmailRow   = document.getElementById('license-email-row');
+    const licenseEmailInput = document.getElementById('licenseEmailInput');
+    function revealLicenseEmail(msg) {
+      if (licenseEmailRow) licenseEmailRow.style.display = 'flex';
+      if (msg) { licenseStatus.textContent = msg; licenseStatus.className = 'gmail-status unset'; }
+    }
+    licenseInput.addEventListener('input', () => {
+      if (isTeamKey(licenseInput.value)) revealLicenseEmail('');
+    });
+
     licenseSave.addEventListener('click', async () => {
       const key = licenseInput.value.trim();
       if (!key) { licenseStatus.textContent = 'Paste your license key'; return; }
+      const email = licenseEmailInput ? licenseEmailInput.value.trim() : '';
+      if (isTeamKey(key) && !email) { revealLicenseEmail('Email required for team activation'); return; }
       licenseStatus.textContent = 'Checking…';
       licenseStatus.className = 'gmail-status';
-      const { valid, tier } = await validateLicenseKey(key, true);
+      const { valid, tier, reason, deviceLimit } = await validateLicenseKey(key, true, email);
       if (valid) {
-        licenseStatus.textContent = `✓ License active${tier === 'pro' ? ' · Pro' : ''}`;
+        const tierLabel = tier === 'team' ? ' · Team' : tier === 'pro' ? ' · Pro' : '';
+        licenseStatus.textContent = `✓ License active${tierLabel}`;
         licenseStatus.className = 'gmail-status set';
         document.getElementById('manageSubBtn').style.display = 'inline-block';
         licenseInput.value = '';
         licenseInput.placeholder = key.slice(0, 8) + '••••••••';
+        if (licenseEmailInput) licenseEmailInput.value = '';
+      } else if (reason === 'use_team_validation' || reason === 'missing_email') {
+        revealLicenseEmail(reason === 'missing_email'
+          ? 'Email required for team activation'
+          : 'This is a team key — enter your email and click Activate');
+      } else if (isTeamKey(key)) {
+        licenseStatus.textContent = '✗ ' + teamReasonText(reason, deviceLimit);
+        licenseStatus.className = 'gmail-status unset';
       } else {
         licenseStatus.textContent = '✗ Invalid key — check your email or contact support';
         licenseStatus.className = 'gmail-status unset';
@@ -222,6 +323,7 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       'lovedLoads',
       'licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier',
       'useCSV', 'useDB',
+      'teamId', 'teamEmail', 'teamRole', 'seatLimit', 'seatsUsed', 'useTeam',
     ]);
     await chrome.storage.local.clear();
     const toRestore = Object.fromEntries(Object.entries(keep).filter(([, v]) => v !== undefined));

@@ -57,6 +57,12 @@
         style="width:100%; box-sizing:border-box; padding:11px 14px; border:1.5px solid #d1d1d6; border-radius:10px; font-size:13px; color:#1a1a1a; outline:none; text-align:center; letter-spacing:0.5px;" />
     </div>
 
+    <!-- Team activation only — revealed when a LANEIQ-TEAM key is entered. -->
+    <div id="activation-email-wrap" style="width:100%; margin-bottom:12px; display:none;">
+      <input id="activation-email-input" type="email" placeholder="you@company.com (team plan)"
+        style="width:100%; box-sizing:border-box; padding:11px 14px; border:1.5px solid #d1d1d6; border-radius:10px; font-size:13px; color:#1a1a1a; outline:none; text-align:center; letter-spacing:0.3px;" />
+    </div>
+
     <button id="activation-activate-btn"
       style="width:100%; padding:12px; background:#007aff; color:#fff; border:none; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; margin-bottom:20px;">
       Activate
@@ -95,6 +101,10 @@
       <input class="gmail-input" id="licenseInput" placeholder="LANEIQ-XXXX-XXXX-XXXX">
       <button class="gmail-save" id="licenseSave">Activate</button>
       <button class="license-clear-btn" id="licenseClear">Clear</button>
+    </div>
+    <!-- Team activation only — revealed when a LANEIQ-TEAM key is entered. -->
+    <div class="gmail-row" id="license-email-row" style="display:none;margin-top:7px">
+      <input class="gmail-input" id="licenseEmailInput" type="email" placeholder="you@company.com (team plan)">
     </div>
     <button class="gmail-save" id="manageSubBtn" style="display:none;width:100%;margin-top:7px">Manage Subscription</button>
     <div class="gmail-status unset" id="licenseStatus">Enter your license key to activate LaneIQ</div>

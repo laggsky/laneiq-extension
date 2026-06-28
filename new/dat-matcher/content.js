@@ -155,6 +155,192 @@
     for (const [k, recs] of Object.entries(index)) out[k] = recs.map(r => ({...r, _f: r._f > removedIdx ? r._f-1 : r._f}));
     return out;
   }
+
+  // ── Team data overlay (Layer 4) — IN-MEMORY ONLY; never persisted ────────────
+  const TEAM_LANES_URL = 'https://laneiq-backend-production.up.railway.app/team/lanes';
+  const TEAM_UPLOAD_URL = 'https://laneiq-backend-production.up.railway.app/team/upload';
+  const TEAM_SEATS_LIST_URL   = 'https://laneiq-backend-production.up.railway.app/team/seats/list';
+  const TEAM_SEATS_REMOVE_URL = 'https://laneiq-backend-production.up.railway.app/team/seats/remove';
+  let _teamLanesCache = null;  // raw lanes from last successful fetch this session
+  let _teamStatusMsg  = '';    // surfaced in the Setup tab on fetch failure
+
+  // Map /team/lanes native-record keys → canonical CSV header objects so team
+  // data flows through the EXACT same buildIndexesFromCSVRows path as a CSV
+  // (cleanRate, origin>=2 drop, trailer/truck resolution, broker→brokerIndex →
+  // purple). The team records are tagged _f:'team' (string) so they never collide
+  // with CSV file indices (numeric) and can be removed without touching CSV data.
+  function teamRecordsToCSVRows(lanes) {
+    return (lanes || []).map(L => ({
+      'Origin': L.origin || '',
+      'PU Date': L.puDate || '',
+      'Destination': L.destination || '',
+      'Weight / Pallets / FT': L.weight || '',
+      'Rate': L.rate != null ? String(L.rate) : '',
+      'Trailer': L.trailer || '',
+      'Truck': L.truck || '',
+      'Pickup Company + Full Address': L.pickupCompany || '',
+      'Delivery Company + Full Address': L.deliveryCompany || '',
+      'Commodity': L.commodity || '',
+      'Broker': L.broker || '',
+      'Load #': L.loadNum || '',
+    }));
+  }
+
+  // Re-render the Setup tab in place if it's currently shown (surfaces team
+  // status / refreshes after the async overlay fetch resolves).
+  function _refreshSetupIfOpen() {
+    try {
+      const sb = document.getElementById('dlm-body');
+      if (sb && sb.querySelector('#dlm-setup-ds-status')) renderSetupBody(sb);
+    } catch {}
+  }
+
+  // Strip any prior team overlay from the in-memory indexes (CSV _f-numeric
+  // records untouched), then — if Team mode is on — fetch /team/lanes (Option A:
+  // each page load), build via buildIndexesFromCSVRows('team'), and merge in via
+  // mergeCSVIndexes. chrome.storage is NEVER written. Re-run after any
+  // storage-driven index reload so the overlay survives CSV re-inits.
+  async function applyTeamOverlay() {
+    if (odIndex)     odIndex     = removeFromCSVIndex(odIndex, 'team');
+    if (oIndex)      oIndex      = removeFromCSVIndex(oIndex, 'team');
+    if (brokerIndex) brokerIndex = removeFromCSVIndex(brokerIndex, 'team');
+
+    if (!(useTeam && licenseTier === 'team')) { _teamLanesCache = null; _teamStatusMsg = ''; return; }
+
+    _teamStatusMsg = '';
+    try {
+      let lanes = _teamLanesCache;
+      if (!lanes) {
+        const deviceId = await getDeviceId();
+        const resp = await fetch(TEAM_LANES_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: licenseKey, email: teamEmail, deviceId }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) {
+          _teamStatusMsg = `Couldn't load team data — ${data.reason || ('HTTP ' + resp.status)}`;
+          console.warn('[LaneIQ] /team/lanes failed:', _teamStatusMsg);
+          _refreshSetupIfOpen();
+          return;   // leave CSV indexes intact
+        }
+        lanes = data.lanes || [];
+        _teamLanesCache = lanes;
+        console.log(`[LaneIQ] team overlay: ${lanes.length} lanes merged`);
+      }
+      const rows = teamRecordsToCSVRows(lanes);
+      const t = buildIndexesFromCSVRows(rows, 'team');
+      odIndex     = mergeCSVIndexes(odIndex     || {}, t.odIndex);
+      oIndex      = mergeCSVIndexes(oIndex      || {}, t.oIndex);
+      brokerIndex = mergeCSVIndexes(brokerIndex || {}, t.brokerIndex);
+    } catch (err) {
+      _teamStatusMsg = `Couldn't load team data — ${err.message || 'network error'}`;
+      console.error('[LaneIQ] team overlay error:', err.message);
+    }
+    try { scan(); } catch {}
+    _refreshSetupIfOpen();
+  }
+
+  // Selector for the messy-mapper panel — CSV import renders under the CSV card,
+  // a manager's team upload renders under the Upload Team Data card.
+  function _messyPanelSel() { return _messyTarget === 'team' ? '#dlm-team-messy-panel' : '#dlm-messy-panel'; }
+
+  // ── Manager: upload mapped rows to the team cloud (REPLACE) ───────────────────
+  // Reuses the EXACT CSV mapper pipeline (messyBuildRows → buildIndexesFromCSVRows)
+  // to produce native-record rows, then POSTs to /team/upload instead of writing
+  // chrome.storage. Never touches the manager's own local CSV indexes.
+  async function messyUploadToTeam(bodyEl) {
+    if (!_messy) return;
+    if (!messyValidate().ok) return;
+    const panel    = bodyEl.querySelector('#dlm-team-messy-panel');
+    const statusEl = bodyEl.querySelector('#dlm-team-upload-status');
+    const setStatus = (msg, color) => { if (statusEl) { statusEl.textContent = msg; statusEl.style.color = color || '#aeaeb2'; } };
+    if (!confirm("This replaces your team's current shared data. Continue?")) return;
+    // Native records via the existing pipeline — every valid row appears once in
+    // oIndex; strip the _f provenance tag (backend ignores it anyway).
+    const built = buildIndexesFromCSVRows(messyBuildRows(), 0);
+    const lanes = Object.values(built.oIndex).flat().map(({ _f, ...rec }) => rec);
+    if (!lanes.length) { setStatus('No rows to upload — map a column to Origin.', '#ff3b30'); return; }
+    const impBtn = panel ? panel.querySelector('#dlm-mz-import') : null;
+    if (impBtn) { impBtn.disabled = true; impBtn.textContent = 'Uploading…'; }
+    setStatus(`Uploading ${lanes.length.toLocaleString()} lanes…`);
+    try {
+      const deviceId = await getDeviceId();
+      const resp = await fetch(TEAM_UPLOAD_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: licenseKey, email: teamEmail, deviceId, lanes }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.ok) {
+        setStatus(`✓ Uploaded ${(data.lanes_loaded ?? lanes.length).toLocaleString()} lanes to your team`, '#34c759');
+        _messy = null; _messyTarget = 'csv';
+        if (panel) panel.innerHTML = '';
+        _teamLanesCache = null;   // force this manager's overlay to refetch the new data
+      } else {
+        setStatus(`Upload failed — ${data.reason || ('HTTP ' + resp.status)}`, '#ff3b30');
+        if (impBtn) { impBtn.disabled = false; impBtn.textContent = 'Clean & Upload to Team'; }
+      }
+    } catch (err) {
+      setStatus(`Upload failed — ${err.message || 'network error'}`, '#ff3b30');
+      if (impBtn) { impBtn.disabled = false; impBtn.textContent = 'Clean & Upload to Team'; }
+    }
+  }
+
+  // ── Manager: list/remove team seats ──────────────────────────────────────────
+  async function loadTeamSeats(bodyEl) {
+    const summary = bodyEl.querySelector('#dlm-team-seats-summary');
+    const list    = bodyEl.querySelector('#dlm-team-seats-list');
+    if (!summary || !list) return;
+    summary.textContent = 'Loading seats…'; summary.style.color = '#6e6e73';
+    list.innerHTML = '';
+    try {
+      const deviceId = await getDeviceId();
+      const resp = await fetch(TEAM_SEATS_LIST_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: licenseKey, email: teamEmail, deviceId }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.ok) { summary.textContent = `Couldn't load seats — ${data.reason || ('HTTP ' + resp.status)}`; summary.style.color = '#ff3b30'; return; }
+      summary.textContent = `${data.seats_used} of ${data.seat_limit} seats used`;
+      const mgr = (teamEmail || '').toLowerCase();
+      const rows = (data.seats || []).map(s => {
+        const isMgr = (s.email || '').toLowerCase() === mgr;
+        const last  = s.last_active ? new Date(s.last_active).toLocaleDateString() : '—';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(0,0,0,.04)">
+            <div style="min-width:0">
+              <div style="font-size:12px;font-weight:600;color:#1d1d1f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">${esc(s.name || s.email)}${isMgr ? ' · you' : ''}</div>
+              <div style="font-size:10px;color:#aeaeb2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px">${esc(s.email)} · ${s.devices} device${s.devices === 1 ? '' : 's'} · ${esc(last)}</div>
+            </div>
+            ${isMgr ? '' : `<button class="dlm-team-seat-remove" data-email="${esc(s.email)}" style="background:none;border:1px solid #ff3b30;color:#ff3b30;border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0">Remove</button>`}
+          </div>`;
+      }).join('');
+      list.innerHTML = rows || '<div style="font-size:11px;color:#aeaeb2;padding:6px 0">No seats used yet</div>';
+      list.querySelectorAll('.dlm-team-seat-remove').forEach(b =>
+        b.addEventListener('click', () => removeTeamSeat(b.dataset.email, bodyEl)));
+    } catch (err) {
+      summary.textContent = `Couldn't load seats — ${err.message || 'network error'}`; summary.style.color = '#ff3b30';
+    }
+  }
+
+  async function removeTeamSeat(removeEmail, bodyEl) {
+    if (!removeEmail) return;
+    if (!confirm(`Remove ${removeEmail} from the team? This frees their seat.`)) return;
+    const summary = bodyEl.querySelector('#dlm-team-seats-summary');
+    try {
+      const deviceId = await getDeviceId();
+      const resp = await fetch(TEAM_SEATS_REMOVE_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: licenseKey, email: teamEmail, deviceId, remove_email: removeEmail }),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.ok) loadTeamSeats(bodyEl);
+      else if (summary) { summary.textContent = `Remove failed — ${data.reason || ('HTTP ' + resp.status)}`; summary.style.color = '#ff3b30'; }
+    } catch (err) {
+      if (summary) { summary.textContent = `Remove failed — ${err.message || 'network error'}`; summary.style.color = '#ff3b30'; }
+    }
+  }
+
   // ── In-panel record edit/delete: index surgery helpers ───────────────────────
   // A single CSV record is duplicated across odIndex/oIndex/brokerIndex, and after
   // a storage round-trip those copies are independent value-identical objects. To
@@ -222,7 +408,11 @@
   let dataSource   = 'csv';
   let useCSV = true;
   let useDB  = false;
+  let useTeam = false;     // Team-plan data source (mirrors useDB, but for team tier)
+  let teamRole     = '';   // 'manager' | 'dispatcher' — manager sees upload + seat mgmt
+  let _messyTarget = 'csv';// 'csv' (local import) | 'team' (cloud upload) — shared mapper
   let licenseKey   = '';
+  let teamEmail    = '';   // dispatcher email — sent to /team/lanes + /validate-team
   let dlmMpg        = 6.5;  // saved MPG (persists across sessions)
   let dlmFuelPrice  = 3.89; // saved fuel price
   let dlmDriverRate = 0;    // saved driver pay $/mi
@@ -1395,7 +1585,7 @@ if (so && ro && so !== ro) return false;
     // If indexes aren't loaded yet, leave the row unstamped so the next scan
     // retries it. Stamping before indexes are ready would lock the row out
     // of the skip-guard above, making it permanently invisible to matching.
-    if (!useCSV) return;
+    if (!useCSV && !useTeam) return;   // local matching covers BOTH CSV and team overlay
     if (!odIndex || Object.keys(odIndex).length === 0) return;
 
     const datBroker = getBroker(row);
@@ -1658,6 +1848,28 @@ if (so && ro && so !== ro) return false;
     const INPUT = 'width:100%;border:1px solid #e5e5ea;border-radius:8px;padding:7px 9px;font-size:12px;font-family:inherit;color:#1d1d1f;background:#f9f9fb;outline:none;box-sizing:border-box';
     const BTN   = 'padding:7px 12px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap';
 
+    // Manager-only sections (upload to cloud + seat management). Hidden for
+    // dispatchers and for solo/pro/team-non-manager. Empty string otherwise.
+    const isTeamManager = licenseTier === 'team' && teamRole === 'manager';
+    const managerSectionsHTML = !isTeamManager ? '' : `
+      <div style="${CARD}">
+        <div style="${LABEL}">Upload Team Data</div>
+        <div style="font-size:11px;color:#aeaeb2;margin-bottom:8px">Replaces your team's shared lane history. Your dispatchers see this when Team mode is on. Uploads to the cloud — not stored in this browser.</div>
+        <div id="dlm-team-dropzone" style="border:2px dashed #d1d1d6;border-radius:12px;padding:18px 16px;text-align:center;cursor:pointer;background:#fff;transition:border-color .15s,background .15s">
+          <div style="font-size:14px;font-weight:700;color:#1d1d1f">Drop CSV or Excel to upload to your team</div>
+          <div style="font-size:11px;color:#aeaeb2;margin-top:4px">Same column mapper · replaces current team data</div>
+          <input id="dlm-team-file-input" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls" style="display:none">
+        </div>
+        <div id="dlm-team-messy-panel" style="margin-top:10px"></div>
+        <div id="dlm-team-upload-status" style="font-size:11px;color:#aeaeb2;margin-top:8px"></div>
+      </div>
+      <div style="${CARD}">
+        <div style="${LABEL}">Team Seats</div>
+        <div id="dlm-team-seats-summary" style="font-size:12px;font-weight:600;color:#6e6e73;margin-bottom:8px">Loading seats…</div>
+        <div id="dlm-team-seats-list"></div>
+        <button id="dlm-team-seats-refresh" style="${BTN};margin-top:8px;background:#f2f2f7;color:#1d1d1f">Refresh</button>
+      </div>`;
+
     const fileListHTML = tmpls.length
       ? tmpls.map((f, i) => `
           <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(0,0,0,.04)">
@@ -1697,8 +1909,20 @@ if (so && ro && so !== ro) return false;
             </span>
           </label>
         </div>
-        <div id="dlm-setup-ds-status" style="font-size:11px;color:#aeaeb2;margin-top:8px">
-          ${useCSV && useDB ? 'Both sources active' : useCSV ? 'My CSV active' : useDB ? 'LaneIQ Database active' : 'No data source selected'}
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:#1d1d1f">Team Data ${licenseTier !== 'team' ? '<span style="font-size:10px;color:#ff9500">🔒 Team</span>' : ''}</div>
+            <div style="font-size:11px;color:#aeaeb2">Shared company lane history</div>
+          </div>
+          <label style="position:relative;width:44px;height:24px;cursor:${licenseTier === 'team' ? 'pointer' : 'default'};flex-shrink:0;opacity:${licenseTier === 'team' ? '1' : '.5'}">
+            <input id="dlm-setup-team-toggle" type="checkbox" ${useTeam ? 'checked' : ''} ${licenseTier !== 'team' ? 'disabled' : ''} style="opacity:0;width:0;height:0;position:absolute">
+            <span style="position:absolute;inset:0;background:${useTeam ? '#34c759' : '#c7c7cc'};border-radius:34px;transition:background .2s">
+              <span style="position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s;transform:${useTeam ? 'translateX(20px)' : 'none'};box-shadow:0 1px 3px rgba(0,0,0,.25)"></span>
+            </span>
+          </label>
+        </div>
+        <div id="dlm-setup-ds-status" style="font-size:11px;color:${_teamStatusMsg ? '#ff3b30' : '#aeaeb2'};margin-top:8px">
+          ${_teamStatusMsg ? esc(_teamStatusMsg) : ((useCSV && (useDB || useTeam)) ? 'Both sources active' : useCSV ? 'My CSV active' : useDB ? 'LaneIQ Database active' : useTeam ? 'Team data active' : 'No data source selected')}
         </div>
       </div>
 
@@ -1720,6 +1944,7 @@ if (so && ro && so !== ro) return false;
         </div>
         <div id="dlm-messy-panel" style="margin-top:10px"></div>
       </div>
+      ${managerSectionsHTML}
 
       <div style="${CARD}">
         <div style="${LABEL}">Gmail — Rate Confirmations</div>
@@ -1777,14 +2002,36 @@ if (so && ro && so !== ro) return false;
       dz.addEventListener('drop',      async e => {
         e.preventDefault(); dz.style.borderColor='#d1d1d6'; dz.style.background='#fff';
         const f = e.dataTransfer.files && e.dataTransfer.files[0];
-        if (f) await openMessyFile(f, bodyEl);
+        if (f) { _messyTarget = 'csv'; await openMessyFile(f, bodyEl); }
       });
       fi.addEventListener('change', async e => {
         const f = e.target.files && e.target.files[0];
-        if (f) await openMessyFile(f, bodyEl);
+        if (f) { _messyTarget = 'csv'; await openMessyFile(f, bodyEl); }
         e.target.value = ''; // allow re-selecting the same file
       });
     }
+
+    // Manager-only: team upload dropzone (same mapper, cloud destination) + seats.
+    const tdz = bodyEl.querySelector('#dlm-team-dropzone');
+    const tfi = bodyEl.querySelector('#dlm-team-file-input');
+    if (tdz && tfi) {
+      tdz.addEventListener('click',     () => tfi.click());
+      tdz.addEventListener('dragover',  e => { e.preventDefault(); tdz.style.borderColor='#0058e0'; tdz.style.background='rgba(0,88,224,.04)'; });
+      tdz.addEventListener('dragleave', () => { tdz.style.borderColor='#d1d1d6'; tdz.style.background='#fff'; });
+      tdz.addEventListener('drop',      async e => {
+        e.preventDefault(); tdz.style.borderColor='#d1d1d6'; tdz.style.background='#fff';
+        const f = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) { _messyTarget = 'team'; await openMessyFile(f, bodyEl); }
+      });
+      tfi.addEventListener('change', async e => {
+        const f = e.target.files && e.target.files[0];
+        if (f) { _messyTarget = 'team'; await openMessyFile(f, bodyEl); }
+        e.target.value = '';
+      });
+    }
+    const seatsRefresh = bodyEl.querySelector('#dlm-team-seats-refresh');
+    if (seatsRefresh) seatsRefresh.addEventListener('click', () => loadTeamSeats(bodyEl));
+    if (bodyEl.querySelector('#dlm-team-seats-list')) loadTeamSeats(bodyEl);
     if (_messy) renderMessyPanel(bodyEl); // restore mapping view across re-renders
     // Wire data source toggles after innerHTML
     const csvToggle = bodyEl.querySelector('#dlm-setup-csv-toggle');
@@ -1803,6 +2050,20 @@ if (so && ro && so !== ro) return false;
       }
       useDB = dbToggle.checked;
       await chrome.storage.local.set({ useDB });
+      renderSetupBody(bodyEl);
+    });
+    const teamToggle = bodyEl.querySelector('#dlm-setup-team-toggle');
+    if (teamToggle) teamToggle.addEventListener('change', async () => {
+      if (licenseTier !== 'team') {
+        teamToggle.checked = false;
+        const st = bodyEl.querySelector('#dlm-setup-ds-status');
+        if (st) { st.textContent = '🔒 Team plan feature'; st.style.color = '#ff9500'; }
+        return;
+      }
+      useTeam = teamToggle.checked;
+      // Toggle-off clears the cache so a later toggle-on refetches fresh team data.
+      if (!useTeam) { _teamLanesCache = null; _teamStatusMsg = ''; }
+      await chrome.storage.local.set({ useTeam });   // → onChanged re-init → applyTeamOverlay
       renderSetupBody(bodyEl);
     });
   }
@@ -2067,7 +2328,7 @@ if (so && ro && so !== ro) return false;
   }
 
   async function openMessyFile(file, bodyEl) {
-    const panel = bodyEl.querySelector('#dlm-messy-panel');
+    const panel = bodyEl.querySelector(_messyPanelSel());
     const showErr = msg => {
       _messy = null;
       if (panel) panel.innerHTML =
@@ -2095,7 +2356,7 @@ if (so && ro && so !== ro) return false;
   }
 
   function renderMessyPanel(bodyEl) {
-    const panel = bodyEl.querySelector('#dlm-messy-panel');
+    const panel = bodyEl.querySelector(_messyPanelSel());
     if (!panel) return;
     if (!_messy) { panel.innerHTML = ''; return; }
     const MZBTN = 'padding:7px 12px;background:#0058e0;color:#fff;border:none;border-radius:8px;font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;white-space:nowrap';
@@ -2150,7 +2411,7 @@ if (so && ro && so !== ro) return false;
          <div style="margin-top:8px">
            ${!hasOrigin ? '<div style="font-size:11px;color:#ff3b30;font-weight:600;margin-bottom:6px">⚠ Map a column to <strong>Origin</strong> (required).</div>' : ''}
            ${dups.length ? `<div style="font-size:11px;color:#ff3b30;font-weight:600;margin-bottom:6px">⚠ ${dups.length} field${dups.length > 1 ? 's are' : ' is'} mapped to more than one column (shown in red). Fix to import.</div>` : ''}
-           <button id="dlm-mz-import" ${ok ? '' : 'disabled'} style="${MZBTN};width:100%;${ok ? '' : 'opacity:.45;cursor:not-allowed'}">Clean &amp; Import</button>
+           <button id="dlm-mz-import" ${ok ? '' : 'disabled'} style="${MZBTN};width:100%;${ok ? '' : 'opacity:.45;cursor:not-allowed'}">${_messyTarget === 'team' ? 'Clean &amp; Upload to Team' : 'Clean &amp; Import'}</button>
            <div id="dlm-mz-status" style="font-size:10px;color:#aeaeb2;margin-top:6px;text-align:center"></div>
          </div>
        </div>`;
@@ -2161,7 +2422,7 @@ if (so && ro && so !== ro) return false;
     if (newGrid) { newGrid.scrollLeft = prevScrollLeft; newGrid.scrollTop = prevScrollTop; }
 
     const cancel = panel.querySelector('#dlm-mz-cancel');
-    if (cancel) cancel.addEventListener('click', () => { _messy = null; panel.innerHTML = ''; });
+    if (cancel) cancel.addEventListener('click', () => { _messy = null; _messyTarget = 'csv'; panel.innerHTML = ''; });
     const hashdr = panel.querySelector('#dlm-mz-hashdr');
     if (hashdr) hashdr.addEventListener('change', e => {
       _messy.hasHeader = e.target.checked;
@@ -2184,7 +2445,7 @@ if (so && ro && so !== ro) return false;
       renderMessyPanel(bodyEl);
     }));
     const imp = panel.querySelector('#dlm-mz-import');
-    if (imp) imp.addEventListener('click', () => messyImport(bodyEl));
+    if (imp) imp.addEventListener('click', () => (_messyTarget === 'team' ? messyUploadToTeam(bodyEl) : messyImport(bodyEl)));
   }
 
   // Import the mapped grid using the IDENTICAL append-merge as processSetupCSV
@@ -3994,11 +4255,16 @@ if (so && ro && so !== ro) return false;
 
     // License gate — Railway /validate is the authoritative check.
     // Falls back to stored licenseValid only on network error.
-    const lic = await chrome.storage.local.get(['licenseKey', 'licenseValid']);
+    const lic = await chrome.storage.local.get(['licenseKey', 'licenseValid', 'licenseTier', 'teamEmail']);
 
     if (!lic.licenseKey) return;
 
-    const VALIDATION_URL = 'https://laneiq-backend-production.up.railway.app/validate';
+    // Team licenses revalidate through /validate-team (seat enforcement) with the
+    // dispatcher's email. Solo/pro stay on /validate unchanged.
+    const isTeamLicense = lic.licenseTier === 'team';
+    const VALIDATION_URL = isTeamLicense
+      ? 'https://laneiq-backend-production.up.railway.app/validate-team'
+      : 'https://laneiq-backend-production.up.railway.app/validate';
     let licenseOK = false;
     let backendTier = null;
 
@@ -4014,13 +4280,15 @@ if (so && ro && so !== ro) return false;
       const resp = await fetch(VALIDATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: lic.licenseKey, deviceId }),
+        body: isTeamLicense
+          ? JSON.stringify({ key: lic.licenseKey, email: lic.teamEmail || '', deviceId })
+          : JSON.stringify({ key: lic.licenseKey, deviceId }),
       });
       if (resp.ok) {
         const data = await resp.json();
         if (data.valid) {
           licenseOK = true;
-          backendTier = data.tier || null;
+          backendTier = isTeamLicense ? 'team' : (data.tier || null);
           _licenseValidatedAt = Date.now();
           _licenseCachedTier  = backendTier;
           await chrome.storage.local.set({
@@ -4028,6 +4296,14 @@ if (so && ro && so !== ro) return false;
             licenseCheckedAt: new Date().toISOString(),
           });
           console.log('[LaneIQ] license validated by Railway | tier:', backendTier);
+        } else if (isTeamLicense) {
+          // Team: seat_limit_reached / device_limit / not_a_seat / invalid →
+          // lock features (no soft-degrade), but log the reason for diagnosis.
+          console.warn('[LaneIQ] team revalidation failed —', data.reason);
+          _licenseValidatedAt = 0;
+          _licenseCachedTier  = null;
+          await chrome.storage.local.set({ licenseValid: false });
+          return;
         } else if (data.reason === 'device_limit') {
           // Soft-degrade (option a): never abruptly kill a working session over a
           // device-limit response. If this install was previously valid, keep it
@@ -4055,7 +4331,7 @@ if (so && ro && so !== ro) return false;
 
     if (!licenseOK) return;
 
-    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','dlmDriverPercent','dlmDriverPayMode','dlmTargetRpm','licenseTier','dataSource','useCSV','useDB','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider','routePopped','routeWindowId','routeCommand','routeClosed']);
+    const s = await chrome.storage.local.get(['odIndex','oIndex','brokerIndex','laneCount','indexVersion','gmailIndex','gmailEmail','gmailOAuthEmail','outlookOAuthEmail','senderGmailIndex','emailSubject','emailTemplate','signature','panelPopped','mapsApiKey','dlmMpg','dlmFuelPrice','dlmDriverRate','dlmDriverPercent','dlmDriverPayMode','dlmTargetRpm','licenseTier','dataSource','useCSV','useDB','useTeam','teamRole','lovedLoads','emailTemplates','activeTemplate','filesMeta','dlm-panel-height','dlm-route-modal-rect','dlmRadiusOriginMi','dlmRadiusDestMi','outlookEmail','outlookConfigured','outlookHost','activeMailProvider','routePopped','routeWindowId','routeCommand','routeClosed']);
 
     if (Number.isFinite(s.dlmRadiusOriginMi)) _radiusOriginMi = s.dlmRadiusOriginMi;
     if (Number.isFinite(s.dlmRadiusDestMi))   _radiusDestMi   = s.dlmRadiusDestMi;
@@ -4066,6 +4342,9 @@ if (so && ro && so !== ro) return false;
     licenseTier = s.licenseTier || 'solo';
     useCSV = s.useCSV !== false;
     useDB  = s.useDB  ?? true;
+    useTeam = s.useTeam === true;        // Team source — off until explicitly toggled on
+    teamRole = s.teamRole || '';         // 'manager' unlocks upload + seat management
+    teamEmail = lic.teamEmail || '';     // dispatcher email for /team/lanes
     licenseKey  = lic.licenseKey || '';
     const usingAPI = licenseTier === 'pro' && useDB;
 
@@ -4163,7 +4442,7 @@ if (so && ro && so !== ro) return false;
         // NOT on 'laneCount' — single-record delete/edit also write laneCount, and a
         // re-index there caused the flicker + scroll-jump-to-top. Surgical deletes now
         // do their own single-node DOM removal with no re-render.
-        if ('useCSV' in changes || 'useDB' in changes || 'loadedAt' in changes) {
+        if ('useCSV' in changes || 'useDB' in changes || 'useTeam' in changes || 'loadedAt' in changes) {
           clearAllHighlights();
           _initialized = false;
           odIndex = oIndex = brokerIndex = null;
@@ -4215,7 +4494,7 @@ if (so && ro && so !== ro) return false;
     // CSV gate — skip index loading if no active data source, but always build and
     // show the panel so the user can reach the Setup tab to re-enable a source.
     // Corrupted or missing storage values are treated the same as "both off".
-    if (!s.laneCount && !usingAPI) {
+    if (!s.laneCount && !usingAPI && !(useTeam && licenseTier === 'team')) {
       const _disabledMsg = '<div style="text-align:center;padding:36px 20px;color:#aeaeb2;font-size:13px;line-height:1.6">Enable a data source in settings to see rates</div>';
       panelPopped = s.panelPopped || false;
       if (!panelPopped) {
@@ -4245,6 +4524,11 @@ if (so && ro && so !== ro) return false;
       oIndex      = s.oIndex      || {};
       brokerIndex = s.brokerIndex || {};
     }
+
+    // Team overlay (Layer 4) — merge /team/lanes into the SAME in-memory indexes
+    // the CSV path uses (Option A: fetched each page load). Never persisted, so
+    // CSV storage stays pure. Runs for team tier whether or not CSV is present.
+    if (licenseTier === 'team') await applyTeamOverlay();
 
     // v1.32 radius matching — load bundled coords + log real-world coverage (dev aid)
     await loadCityCoords();
@@ -5017,8 +5301,8 @@ Please tell me more about your load from {origin}, pickup on {date}, going to {d
         if (expandKey === _lastExpandKey && now - _lastExpandTime < 400) continue;
         _lastExpandKey = expandKey;
         _lastExpandTime = now;
-        if (!useCSV && !useDB) {
-          // Both sources off — show panel with disabled state so toggles remain accessible
+        if (!useCSV && !useDB && !useTeam) {
+          // All sources off — show panel with disabled state so toggles remain accessible
           if (!panel) panel = buildPanel();
           if (!panelPopped) panel.style.display = 'flex';
           switchTab('history');
