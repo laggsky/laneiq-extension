@@ -131,8 +131,11 @@ if (typeof module !== 'undefined') module.exports = { validateLicenseKey };
 if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded', async () => {
 
   // --- Activation screen gate ---
-  const licenseCheck = await chrome.storage.local.get(['licenseValid']);
-  if (!licenseCheck.licenseValid) {
+  const licenseCheck = await chrome.storage.local.get(['licenseValid', 'licenseKey', 'licenseTier']);
+  // A stored key + tier counts as "activated" too — a logged-in user (even with a
+  // stale/offline licenseValid) sees their plan, not the bare Activate screen.
+  const isActivated = licenseCheck.licenseValid || (licenseCheck.licenseKey && licenseCheck.licenseTier);
+  if (!isActivated) {
     document.getElementById('activation-screen').style.display = 'flex';
     Array.from(document.body.children).forEach(el => {
       if (el.id !== 'activation-screen') el.style.display = 'none';
@@ -238,18 +241,22 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   const licenseSave   = document.getElementById('licenseSave');
 
   if (licenseInput && licenseSave && licenseStatus) {
-    const saved = await chrome.storage.local.get(['licenseKey', 'licenseValid', 'licenseCheckedAt']);
+    const saved = await chrome.storage.local.get(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier', 'teamEmail']);
     if (saved.licenseKey) {
       licenseInput.placeholder = saved.licenseKey.slice(0, 8) + '••••••••';
+      const planLabel = saved.licenseTier === 'team' ? 'Team plan' : saved.licenseTier === 'pro' ? 'Pro' : 'Solo';
+      const teamSuffix = (saved.licenseTier === 'team' && saved.teamEmail) ? ' · ' + saved.teamEmail : '';
       const age   = saved.licenseCheckedAt ? Date.now() - new Date(saved.licenseCheckedAt).getTime() : Infinity;
       const fresh = age < LICENSE_GRACE_MS;
       if (saved.licenseValid && fresh) {
-        licenseStatus.textContent = '✓ License active';
+        licenseStatus.textContent = `✓ Active — ${planLabel}${teamSuffix}`;
         licenseStatus.className = 'gmail-status set';
         document.getElementById('manageSubBtn').style.display = 'inline-block';
+        licenseSave.textContent = 'Change key';   // already active → re-entry, not first activation
       } else if (saved.licenseValid && !fresh) {
-        licenseStatus.textContent = '⚠ License cached — reconnect to verify';
+        licenseStatus.textContent = `⚠ ${planLabel} cached — reconnect to verify`;
         licenseStatus.className = 'gmail-status unset';
+        licenseSave.textContent = 'Change key';
       } else {
         licenseStatus.textContent = '✗ License invalid';
         licenseStatus.className = 'gmail-status unset';

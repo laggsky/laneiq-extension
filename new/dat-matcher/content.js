@@ -309,7 +309,7 @@
         const last  = s.last_active ? new Date(s.last_active).toLocaleDateString() : '—';
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(0,0,0,.04)">
             <div style="min-width:0">
-              <div style="font-size:12px;font-weight:600;color:#1d1d1f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">${esc(s.name || s.email)}${isMgr ? ' · you' : ''}</div>
+              <div style="font-size:12px;font-weight:600;color:#1d1d1f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">${esc(s.name || s.email)} · ${isMgr ? 'Manager' : 'Dispatcher'}</div>
               <div style="font-size:10px;color:#aeaeb2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px">${esc(s.email)} · ${s.devices} device${s.devices === 1 ? '' : 's'} · ${esc(last)}</div>
             </div>
             ${isMgr ? '' : `<button class="dlm-team-seat-remove" data-email="${esc(s.email)}" style="background:none;border:1px solid #ff3b30;color:#ff3b30;border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0">Remove</button>`}
@@ -1855,8 +1855,11 @@ if (so && ro && so !== ro) return false;
       <div style="${CARD}">
         <div style="${LABEL}">Upload Team Data</div>
         <div style="font-size:11px;color:#aeaeb2;margin-bottom:8px">Replaces your team's shared lane history. Your dispatchers see this when Team mode is on. Uploads to the cloud — not stored in this browser.</div>
-        <div id="dlm-team-dropzone" style="border:2px dashed #d1d1d6;border-radius:12px;padding:18px 16px;text-align:center;cursor:pointer;background:#fff;transition:border-color .15s,background .15s">
-          <div style="font-size:14px;font-weight:700;color:#1d1d1f">Drop CSV or Excel to upload to your team</div>
+        <div id="dlm-team-dropzone" style="border:2px dashed #d1d1d6;border-radius:12px;padding:24px 16px;text-align:center;cursor:pointer;margin-top:8px;background:#fff;transition:border-color .15s,background .15s">
+          <div style="width:48px;height:48px;margin:0 auto 12px;border-radius:12px;background:#0058e0;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,88,224,.25)">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+          </div>
+          <div style="font-size:15px;font-weight:700;color:#1d1d1f">Drop CSV or Excel to upload to your team</div>
           <div style="font-size:11px;color:#aeaeb2;margin-top:4px">Same column mapper · replaces current team data</div>
           <input id="dlm-team-file-input" type="file" accept=".csv,.txt,.tsv,.xlsx,.xls" style="display:none">
         </div>
@@ -1903,9 +1906,9 @@ if (so && ro && so !== ro) return false;
             <div style="font-size:11px;color:#aeaeb2">Market-wide rate data</div>
           </div>
           <label style="position:relative;width:44px;height:24px;cursor:${licenseTier === 'pro' ? 'pointer' : 'default'};flex-shrink:0;opacity:${licenseTier === 'pro' ? '1' : '.5'}">
-            <input id="dlm-setup-db-toggle" type="checkbox" ${useDB ? 'checked' : ''} ${licenseTier !== 'pro' ? 'disabled' : ''} style="opacity:0;width:0;height:0;position:absolute">
-            <span id="dlm-db-slider" style="position:absolute;inset:0;background:${useDB ? '#34c759' : '#c7c7cc'};border-radius:34px;transition:background .2s">
-              <span style="position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s;transform:${useDB ? 'translateX(20px)' : 'none'};box-shadow:0 1px 3px rgba(0,0,0,.25)"></span>
+            <input id="dlm-setup-db-toggle" type="checkbox" ${(licenseTier === 'pro' && useDB) ? 'checked' : ''} ${licenseTier !== 'pro' ? 'disabled' : ''} style="opacity:0;width:0;height:0;position:absolute">
+            <span id="dlm-db-slider" style="position:absolute;inset:0;background:${(licenseTier === 'pro' && useDB) ? '#34c759' : '#c7c7cc'};border-radius:34px;transition:background .2s">
+              <span style="position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s;transform:${(licenseTier === 'pro' && useDB) ? 'translateX(20px)' : 'none'};box-shadow:0 1px 3px rgba(0,0,0,.25)"></span>
             </span>
           </label>
         </div>
@@ -4341,7 +4344,7 @@ if (so && ro && so !== ro) return false;
     // Resolve tier/dataSource early so we can use them in the guards below
     licenseTier = s.licenseTier || 'solo';
     useCSV = s.useCSV !== false;
-    useDB  = s.useDB  ?? true;
+    useDB  = licenseTier === 'pro' ? (s.useDB ?? true) : false;  // DB is pro-only — never default-on for solo/team
     useTeam = s.useTeam === true;        // Team source — off until explicitly toggled on
     teamRole = s.teamRole || '';         // 'manager' unlocks upload + seat management
     teamEmail = lic.teamEmail || '';     // dispatcher email for /team/lanes
