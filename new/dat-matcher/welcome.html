@@ -463,8 +463,8 @@
   /* ════════════════════════════════════════════════════════════════════
      SCREEN 6 — PLANS
      ════════════════════════════════════════════════════════════════════ */
-  #screen6 .inner { max-width: 1020px; }
-  .plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-bottom: 14px; }
+  #screen6 .inner { max-width: 1300px; }
+  .plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 14px; }
   .plan {
     position: relative; background: var(--panel);
     border: 1px solid var(--hair); border-radius: var(--radius);
@@ -560,6 +560,8 @@
   }
   .act-input::placeholder { color: var(--faint); }
   .act-input:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(194,145,47,.12); }
+  .act-email-wrap { display: none; }
+  .act-input.act-email-input { font-family: inherit; letter-spacing: normal; text-transform: none; text-align: center; }
   .act-error {
     display: none; width: 100%;
     color: #dc2626; font-size: 13px; margin: 0 0 10px;
@@ -1142,6 +1144,20 @@ This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Pleas
             <div class="plan-note">Perfect if you're new to a lane or want to cross-check your rates against the market.</div>
             <a class="plan-cta" data-stripe href="https://buy.stripe.com/8x26oG9vjf4u6uIchz5EY06" target="_blank" rel="noopener">Get Pro</a>
           </div>
+
+          <div class="plan">
+            <div class="plan-name">Business</div>
+            <div class="plan-price"><span class="amt">$17</span><span class="per">/seat/mo</span></div>
+            <div class="plan-tag-line">Shared team lane history for your whole crew</div>
+            <ul class="plan-feats">
+              <li>Everything in Solo, for every dispatcher</li>
+              <li>Manager uploads once — the whole team matches</li>
+              <li>Same green / yellow / purple highlights team-wide</li>
+              <li>Central seat management, 2 devices per person</li>
+            </ul>
+            <div class="plan-note">Built for dispatch teams — one shared rate history, managed from a single account.</div>
+            <a class="plan-cta" data-stripe href="https://buy.stripe.com/6oU4gy4aZcWmg5i3L35EY07" target="_blank" rel="noopener">Get Business</a>
+          </div>
         </div>
 
         <button class="skip-link" data-go="7">I already have a key — activate now →</button>
@@ -1173,6 +1189,12 @@ This is <span class="hl">Maria</span> with <span class="hl">LaneIQ</span>. Pleas
                  placeholder="LANEIQ-XXXX-XXXX-XXXX"
                  aria-label="Activation key"
                  spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="characters">
+          <div class="act-email-wrap" id="act-email-wrap">
+            <input class="act-input act-email-input" id="act-email" type="email"
+                   placeholder="you@company.com (team plan)"
+                   aria-label="Team email"
+                   spellcheck="false" autocomplete="email" autocorrect="off">
+          </div>
           <p class="act-error" id="act-error"></p>
           <button class="act-btn" id="activate-btn" type="button">Activate</button>
 

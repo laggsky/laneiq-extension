@@ -304,12 +304,20 @@
       if (!resp.ok || !data.ok) { summary.textContent = `Couldn't load seats — ${data.reason || ('HTTP ' + resp.status)}`; summary.style.color = '#ff3b30'; return; }
       summary.textContent = `${data.seats_used} of ${data.seat_limit} seats used`;
       const mgr = (teamEmail || '').toLowerCase();
-      const rows = (data.seats || []).map(s => {
+      const sortedSeats = (data.seats || []).slice().sort((a, b) => {
+        const aMgr = (a.email || '').toLowerCase() === mgr ? 0 : 1;
+        const bMgr = (b.email || '').toLowerCase() === mgr ? 0 : 1;
+        return aMgr - bMgr;
+      });
+      const rows = sortedSeats.map(s => {
         const isMgr = (s.email || '').toLowerCase() === mgr;
         const last  = s.last_active ? new Date(s.last_active).toLocaleDateString() : '—';
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(0,0,0,.04)">
             <div style="min-width:0">
-              <div style="font-size:12px;font-weight:600;color:#1d1d1f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px">${esc(s.name || s.email)} · ${isMgr ? 'Manager' : 'Dispatcher'}</div>
+              <div style="display:flex;align-items:center;gap:5px;max-width:200px">
+                <span style="font-size:12px;font-weight:600;color:${isMgr ? '#007aff' : '#1d1d1f'};flex-shrink:0">${isMgr ? 'Manager' : 'Dispatcher'}</span>
+                <span style="font-size:11px;color:#aeaeb2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">${esc(s.name && s.name !== s.email ? s.name : '')}</span>
+              </div>
               <div style="font-size:10px;color:#aeaeb2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:210px">${esc(s.email)} · ${s.devices} device${s.devices === 1 ? '' : 's'} · ${esc(last)}</div>
             </div>
             ${isMgr ? '' : `<button class="dlm-team-seat-remove" data-email="${esc(s.email)}" style="background:none;border:1px solid #ff3b30;color:#ff3b30;border-radius:6px;font-size:11px;padding:3px 8px;cursor:pointer;flex-shrink:0">Remove</button>`}
@@ -1855,6 +1863,13 @@ if (so && ro && so !== ro) return false;
       <div style="${CARD}">
         <div style="${LABEL}">Upload Team Data</div>
         <div style="font-size:11px;color:#aeaeb2;margin-bottom:8px">Replaces your team's shared lane history. Your dispatchers see this when Team mode is on. Uploads to the cloud — not stored in this browser.</div>
+        <div id="dlm-team-cloud-summary" style="font-size:12px;font-weight:600;color:${_teamLanesCache && _teamLanesCache.length ? '#34c759' : '#6e6e73'};margin-bottom:10px">${
+          _teamLanesCache == null
+            ? 'Turn on Team mode to see current cloud data'
+            : _teamLanesCache.length
+              ? '☁️ ' + _teamLanesCache.length.toLocaleString() + ' lanes in cloud ✓'
+              : 'Cloud is empty — no team data uploaded yet'
+        }</div>
         <div id="dlm-team-dropzone" style="border:2px dashed #d1d1d6;border-radius:12px;padding:24px 16px;text-align:center;cursor:pointer;margin-top:8px;background:#fff;transition:border-color .15s,background .15s">
           <div style="width:48px;height:48px;margin:0 auto 12px;border-radius:12px;background:#0058e0;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 6px rgba(0,88,224,.25)">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>

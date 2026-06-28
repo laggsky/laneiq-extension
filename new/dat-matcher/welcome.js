@@ -1,4 +1,6 @@
 const VALIDATE_URL = 'https://laneiq-backend-production.up.railway.app/validate';
+const VALIDATE_TEAM_URL = 'https://laneiq-backend-production.up.railway.app/validate-team';
+function isTeamKey(key) { return /^LANEIQ-TEAM/i.test((key || '').trim()); }
 const NUM_SCREENS  = 7;
 
 // Stable per-install device id (privacy-friendly UUID, no fingerprinting).
@@ -95,6 +97,8 @@ document.querySelectorAll('.tpl-card').forEach(card => {
 const actInput   = document.getElementById('act-input');
 const actBtn     = document.getElementById('activate-btn');
 const actError   = document.getElementById('act-error');
+const actEmail     = document.getElementById('act-email');
+const actEmailWrap = document.getElementById('act-email-wrap');
 
 function showActError(msg) {
   actError.textContent = msg;
@@ -108,22 +112,45 @@ function clearActError() {
 
 actBtn.addEventListener('click', handleActivate);
 actInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleActivate(); });
+actInput.addEventListener('input', () => {
+  if (actEmailWrap) actEmailWrap.style.display = isTeamKey(actInput.value) ? 'block' : 'none';
+});
+if (actEmail) actEmail.addEventListener('keydown', e => { if (e.key === 'Enter') handleActivate(); });
 
 async function handleActivate() {
   const raw = actInput.value.trim().toUpperCase();
   if (!raw) { showActError('Please enter your activation key.'); return; }
 
+  const team  = isTeamKey(raw);
+  const email = actEmail ? actEmail.value.trim().toLowerCase() : '';
+  if (team && !email) {
+    if (actEmailWrap) actEmailWrap.style.display = 'block';
+    showActError('Email required for team activation.');
+    if (actEmail) actEmail.focus();
+    return;
+  }
+
   clearActError();
   actBtn.disabled     = true;
   actBtn.textContent  = 'Activating…';
   actInput.disabled   = true;
+  if (actEmail) actEmail.disabled = true;
+
+  function resetForm() {
+    actBtn.disabled    = false;
+    actBtn.textContent = 'Activate';
+    actInput.disabled  = false;
+    if (actEmail) actEmail.disabled = false;
+  }
 
   try {
     const deviceId = await getDeviceId();
-    const resp = await fetch(VALIDATE_URL, {
+    const url  = team ? VALIDATE_TEAM_URL : VALIDATE_URL;
+    const body = team ? { key: raw, email, deviceId } : { key: raw, deviceId };
+    const resp = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ key: raw, deviceId }),
+      body:    JSON.stringify(body),
     });
 
     if (!resp.ok) throw new Error('server');
@@ -131,46 +158,58 @@ async function handleActivate() {
     const data = await resp.json();
 
     if (!data.valid) {
-      const msg = data.reason === 'device_limit'
-        ? `This license is already active on ${data.deviceLimit || 3} devices. Contact support@laneiq.org to reset a device.`
-        : "That key isn't valid — check your email and try again.";
+      let msg;
+      if (data.reason === 'device_limit') {
+        msg = `This license is already active on ${data.deviceLimit || 3} devices. Contact support@laneiq.org to reset a device.`;
+      } else if (data.reason === 'use_team_validation' || data.reason === 'missing_email') {
+        if (actEmailWrap) actEmailWrap.style.display = 'block';
+        msg = 'This is a team key — enter your email and click Activate.';
+      } else if (team) {
+        msg = "That team key isn't valid — check the key and email and try again.";
+      } else {
+        msg = "That key isn't valid — check your email and try again.";
+      }
       showActError(msg);
-      actBtn.disabled    = false;
-      actBtn.textContent = 'Activate';
-      actInput.disabled  = false;
+      resetForm();
       actInput.select();
       return;
     }
 
-    // Store with the exact same keys the Setup tab uses so the extension
-    // treats onboarding activation and Setup-tab activation identically.
-    await chrome.storage.local.set({
-      licenseKey:        raw,
-      licenseValid:      true,
-      licenseCheckedAt:  new Date().toISOString(),
-      licenseTier:       data.tier || 'solo',
-    });
+    if (team) {
+      await chrome.storage.local.set({
+        licenseKey:       raw,
+        licenseValid:     true,
+        licenseCheckedAt: new Date().toISOString(),
+        licenseTier:      'team',
+        teamId:           data.team_id || null,
+        teamEmail:        email,
+        teamRole:         data.team_role || null,
+        seatLimit:        data.seat_limit ?? null,
+        seatsUsed:        data.seats_used ?? null,
+        useTeam:          true,
+      });
+    } else {
+      await chrome.storage.local.set({
+        licenseKey:       raw,
+        licenseValid:     true,
+        licenseCheckedAt: new Date().toISOString(),
+        licenseTier:      data.tier || 'solo',
+      });
+    }
 
-    // Success state
     actBtn.textContent = '✓ Activated!';
     actBtn.style.background  = '#16a34a';
     actBtn.style.boxShadow   = '0 8px 20px rgba(22,163,74,.28)';
     actInput.style.borderColor = '#16a34a';
 
-    // Surface the "Open DAT" button more prominently
     const goBtn = document.getElementById('go-btn');
-    if (goBtn) {
-      goBtn.style.marginTop = '24px';
-      goBtn.focus();
-    }
+    if (goBtn) { goBtn.style.marginTop = '24px'; goBtn.focus(); }
 
   } catch (err) {
     const msg = err.message === 'server'
       ? 'Server error — please try again in a moment.'
       : "Couldn't reach the server — check your connection and try again.";
     showActError(msg);
-    actBtn.disabled    = false;
-    actBtn.textContent = 'Activate';
-    actInput.disabled  = false;
+    resetForm();
   }
 }

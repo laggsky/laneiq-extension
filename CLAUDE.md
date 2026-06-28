@@ -1,151 +1,156 @@
 # LaneIQ — DAT Lane Matcher Extension
 ## CLAUDE CODE MUST READ THIS FILE FIRST EVERY SESSION
 
+Deep history + session-by-session detail lives in GBrain. This file is the operating cheat sheet: current-state facts Claude Code needs to work. When in doubt about recent work, check GBrain notes (latest: laneiq-welcome-business-device-0628, laneiq-popup-cleanup-0628, laneiq-team-plan-layer4-packaged).
+
 ---
 
 ## ⚠️ CRITICAL SESSION RULES
-1. Always confirm pwd = /Users/alex/Desktop/LaneIQ-project  2.0/ before touching any file
-2. NEVER work in: LaneIQ-project  2.0 may 19/ — that is an old abandoned folder
+1. Always confirm pwd = /Users/alex/Desktop/LaneIQ-project  2.0/ (TWO spaces) before touching any file
+2. NEVER work in old abandoned folders (e.g. "LaneIQ-project  2.0 may 19/")
 3. Show before/after plan and wait for explicit "go ahead" before any file write
 4. Read this file before doing anything else. No exceptions.
+5. Confirm exact values (model names, links, config strings) from source before suggesting changes
+6. When multiple files are uploaded, read ALL before acting
 
 ---
 
 ## Working Directories
 - Extension: /Users/alex/Desktop/LaneIQ-project  2.0/new/dat-matcher/
 - Backend: /Users/alex/Desktop/LaneIQ-project  2.0/backend/index.js
-- Website: /Users/alex/Desktop/LaneIQ- Netlify/
+- Website: /Users/alex/Desktop/LaneIQ- Netlify/ (space BEFORE "Netlify")
 - Folder name has TWO spaces: "LaneIQ-project  2.0" — not one
+- Extension ID: fbnmkdnkghigdkpakmeehholcbekddol
 
 ---
 
 ## Architecture
 - Chrome Extension (Manifest V3) — content.js injected into one.dat.com
-- Railway backend: https://laneiq-backend-production.up.railway.app
-- Neon Postgres: licenses table (key, email, tier, stripe_customer_id, stripe_subscription_id, active)
-- Resend: transactional email from hello@laneiq.org (DKIM/SPF verified on Cloudflare)
+- Railway backend: https://laneiq-backend-production.up.railway.app (deploys via `railway up` from backend/, NOT git push)
+- Neon Postgres: licenses table (key, email, tier, stripe_customer_id, stripe_subscription_id, active) + team_lanes + team_devices
+- Brevo: transactional email (license keys). MIGRATED from Resend (persistent DKIM failure). Brevo authenticated instantly.
 - ImprovMX: forwards hello@laneiq.org → laneiqapp@gmail.com
-- Bruno agent: https://hermes-agent-production-5bd94.up.railway.app (Telegram @bruno_laneiq_bot)
-- DNS: Cloudflare (NOT Namecheap — nameservers already switched)
-- Website: laneiq.org hosted on Netlify
+- Bruno agent: https://hermes-agent-production-5bd94.up.railway.app (Telegram @bruno_laneiq_bot). Provider: xAI OAuth / grok-4.3. HERMES_REF must never go below v2026.5.16. NEVER change Bruno auth/provider/API key without explicit permission.
+- DNS: Cloudflare (NOT Namecheap — nameservers switched)
+- Website: laneiq.org deploys via CLOUDFLARE PAGES (project "laneiq"), NOT Netlify despite the folder name. Deploy: `cd "/Users/alex/Desktop/LaneIQ- Netlify" && npx wrangler pages deploy . --project-name=laneiq`. Deploying pushes FILES only — does NOT touch DNS or OAuth.
+- laneiq.co: future home (only trips.laneiq.co live there now — the Trip Planner). Main site still on laneiq.org.
 
 ---
 
 ## Current Version
-- Manifest: 1.42
-- Chrome Store target: v1.42 (fix highlights disappearing on SEARCH-TAB switch — DAT's Angular Material tab group swaps in a new rows viewport while leaving the old one connected-but-offscreen, stranding the narrowed MutationObserver; ensureScanObserver now re-targets when the observed node is no longer the LIVE on-screen rows container, findRowsScrollContainer prefers the visible viewport, and the 700ms interval re-checks + re-targets + rescans on tab switch since the URL never changes)
-- v1.41 (live, public): fix rows staying unhighlighted until refresh — pre-check stamped dlmSig before highlight; hasTier-gated skip guards, collision-proof city-aware _rowSig, dlmSig stamped only on tier apply
-- v1.40: Blue origin-tier stripe at Age|Rate cell boundary, rAF-coalesced scroll re-highlight, trip-miles parse fix, click-BEST scroll+highlight, device-limited activation
-- Last submitted to store: v1.38 (June 10 2026 — UNDER REVIEW; do not touch that submission)
+- Extension live ~v1.51. Team Plan + popup overhaul + welcome team activation shipped across v1.49–v1.51.
+- NOTE: as of the latest session, popup/welcome/team edits are LIVE in the unpacked extension but may NOT be packaged/committed yet — confirm git + zip state before assuming.
+- Git: PAT expired — backend deploys via `railway up` (so production runs current code regardless); GitHub push is backup-only and blocked until PAT renewed.
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
-A stale v1.29 once shipped because code landed but the manifest was never
-bumped, so the corrected build couldn't be re-uploaded. Never again:
+A stale build once shipped because code landed but the manifest wasn't bumped, so the corrected build couldn't be re-uploaded. Never again:
 1. Bump manifest "version" in new/dat-matcher/manifest.json BEFORE zipping
-2. Commit (and push) the bump + code
+2. Commit (and push if PAT available) the bump + code
 3. Zip: `cd new/dat-matcher && zip -r ~/Desktop/laneiq-vX.YZ.zip . -x "*.DS_Store"`
-4. Verify INSIDE the zip — not just the folder:
+4. Verify INSIDE the zip (not just the folder):
    - `unzip -p ~/Desktop/laneiq-vX.YZ.zip manifest.json | grep '"version"'` → matches intended
-   - `unzip -p ~/Desktop/laneiq-vX.YZ.zip content.js | grep -c "getMiles"` → >0 (a known-new code marker; swap for whatever's newest)
+   - confirm xlsx.full.min.js is present inside the zip (SheetJS — required, ~951KB)
 5. Confirm the zipped version is STRICTLY GREATER than what's live on the Store (Store rejects equal/lower)
 
 ---
 
-## Pricing
+## Pricing — THREE TIERS
 - Solo: $19/month — CSV only
 - Pro: $39/month — CSV + LaneIQ Database
+- Business: $17/SEAT/month — shared team lane history (qty 2–99)
 - Trial: 30 days free, no card required
 - BETA coupon: BETA2 (100% off, 3-redemption cap)
-- Solo payment link: https://buy.stripe.com/4gM14mazng8ydXabdv5EY02
-- Pro payment link: https://buy.stripe.com/4gMaEW22RcWm9GU1CV5EY01
-- Stripe Customer Portal: https://billing.stripe.com/p/login/7sY9AScHv3lMaKY2GZ5EY00
+- Solo link:     https://buy.stripe.com/cNiaEW22R2hI7yM0yR5EY05
+- Pro link:      https://buy.stripe.com/8x26oG9vjf4u6uIchz5EY06
+- Business link: https://buy.stripe.com/6oU4gy4aZcWmg5i3L35EY07
+- Trial link:    https://buy.stripe.com/cNi4gy7nb4pQ1ao1CV5EY03
+- Customer Portal: https://billing.stripe.com/p/login/7sY9AScHv3lMaKY2GZ5EY00
+- Price IDs (PRICE_TO_TIER in backend/index.js): solo price_1TWKyTCI8743sDK5S8CqHUrW, pro price_1TWKztCI8743sDK5h9xqtSNv, team price_1Tn5w4CI8743sDK5UZuu2ZLe
+- NOTE: website seat stepper is a SELLING VISUAL ONLY — `?quantity=N` does NOT carry to Stripe Payment Links (Stripe ignores it). Buyer sets qty on Stripe's page.
+
+---
+
+## Team / Business Plan (architecture — locked)
+- TWO keys per purchase: a private MANAGER key (LANEIQ-TEAM-MGR-...) that uploads team data + manages seats + counts as a seat; and a SHARED DISPATCHER key (LANEIQ-TEAM-...) that every dispatcher activates with their OWN email.
+- Authority = the BUYER'S EMAIL (licenses.email), not key possession. Manager = whoever activates with the buyer email.
+- Seat = a person (email), 2 devices each. seat_limit from Stripe quantity. Manager bypasses seat cap, not device cap.
+- Team matching is LOCAL / CSV-style, NOT server-side: manager uploads via the same CSV mapper → rows go to team_lanes (cloud) → dispatchers fetch ALL rows from /team/lanes → feed into buildIndexesFromCSVRows → match in-browser, identical to a local CSV (incl. purple/broker). New upload REPLACES old.
+- Team tier = TWO sources: Local CSV + Team (mirrors Pro's CSV + Database). NO Database access for team tier.
+- Backend endpoints (all live): /validate-team (seat gatekeeper), /team/upload (manager-only REPLACE), /team/lanes (any seat fetches full set), /team/seats/list, /team/seats/remove. /validate is HARDENED to reject team keys (returns use_team_validation).
+- team_lanes schema (14 cols): team_id, origin, pu_date, destination, weight_info, rate, pickup_address, delivery_address, commodity, source_file, broker, trailer, truck, load_num, uploaded_at. (broker drives purple matching. source_file is stored but NOT returned by /team/lanes.)
+- Webhook (customer.subscription.created): if tier==='team', forks → seat_limit from quantity → team_id 'TEAM-'+8hex → mints 2 keys → 2 licenses rows (manager carries sub_id, dispatcher NULL) → Brevo emails both keys.
+
+---
+
+## Activation & Popup (current behavior)
+- SOLO/PRO: key only → POST /validate {key, deviceId}. No email field shown.
+- TEAM: key + email → POST /validate-team {key, email, deviceId}. Email field reveals when a LANEIQ-TEAM key is typed.
+- TWO activation surfaces, both team-aware and storing the SAME shape: the popup (popup.js / popup.html) AND the welcome page (welcome.js / welcome.html, Screen 7).
+- Team success stores: licenseKey, licenseValid, licenseCheckedAt, licenseTier:'team', teamId, teamEmail, teamRole, seatLimit, seatsUsed, useTeam:true.
+- useTeam:true AUTO-ENABLES Team mode on activation so new dispatchers don't hunt for a toggle. CAVEAT: only fresh activations get it — pre-existing team users aren't backfilled until they re-activate.
+- Popup License Key section: a SINGLE "Log out" button (full-width red). It wipes session storage and reloads to the activation screen. No in-place key swap — to change keys, log out + re-enter. The old Activate/Change-key + Clear two-button setup is GONE. The "Clear all data" button is REMOVED entirely.
+- silentRevalidate (runs on popup open) branches on isTeamKey: team keys revalidate against /validate-team (with stored teamEmail); solo/pro against /validate. (Earlier flicker bug fixed — team keys were looping a reload through plain /validate.)
+
+## Device Model (important — avoids lockouts)
+- dlmDeviceId is a random UUID in chrome.storage.local, scoped to the CHROME PROFILE (not the physical machine). 2 devices per email.
+- Different Chrome WINDOWS = same profile = same device. To simulate a 2nd dispatcher on one machine, use a different Chrome PROFILE + different email.
+- Logout PRESERVES dlmDeviceId (targeted remove, never wipes it) — re-activating on the same machine reuses the slot. The old "Clear all data" button used to wipe it and burn a slot; that button is now removed.
+- WELCOME PAGE GOTCHA: welcome.html MUST be opened as a real chrome-extension:// page (first-install flow or popup link). In a preview panel / file://, chrome.storage is undefined → getDeviceId() throws → the catch MISLABELS it as "Couldn't reach the server" even though no fetch happened.
 
 ---
 
 ## How the Extension Works
-1. User uploads CSV history or activates Pro DB access via license key
-2. content.js builds OD index, origin index, broker index in chrome.storage
+1. User uploads CSV history, activates Pro DB access, or (team) gets shared team data via the manager upload
+2. content.js builds OD index, origin index, broker index
 3. DAT load rows highlighted by tier:
    - Purple — same lane + same broker
    - Green — same lane, 3+ times
    - Yellow — same lane, 1-2 times
    - Blue — same origin city/state only
 4. Clicking a row opens side panel with lane history + rate data
-5. License validated against Railway /validate on every page load
-6. Stripe webhook → Railway → generates key → Resend sends activation email
+5. License validated against Railway /validate (or /validate-team for team keys) on page load
+6. Stripe webhook → Railway → generates key → Brevo sends activation email
 
 ---
 
-## Known Architecture Notes
-- Two email injection systems in content.js (~line 351 and ~line 1795) — always check both when debugging email chip issues. Merging is a future task, do not combine now.
+## Known Architecture Notes / Gotchas
+- Two email injection systems in content.js — always check both when debugging email chip issues. Do not merge now.
 - DAT renames CSS classes without warning — if extension stops working, check class names first
-- chrome.storage.sync tied to Chrome profile — not to license key
-- License validation uses direct Railway /validate call on every page load
-- Dispatchers never open popup after initial setup — any logic requiring popup interaction is broken by design
+- chrome.storage tied to Chrome profile, not license key
 - processRow is async, chip injection is sync — race condition possible
-
----
-
-## Bugs Fixed May 26 2026
-1. const → let on _dbMatchCache — silent TypeError crash on every toggle
-2. _initializing flag — prevented concurrent init() runs
-3. _observersSetup flag — prevented duplicate MutationObservers accumulating
-4. flushExpand guard: if (!_initialized) return — panel hiding mid re-init
-5. clearAllHighlights hoisted to module scope, onChanged listener moved inside _observersSetup (registers once only)
-6. flushExpand destination fix: if (!o) → if (!o || !d), Strategy 3 now tries node.innerText first
-7. 8 switchTab('history') calls guarded — Setup/Notes/Templates tabs no longer hijacked by row clicks or re-init
+- Check chrome.storage for stuck booleans if UI breaks silently (e.g. useTeam, useDB, useCSV)
+- Google Maps proxied server-side: backend /maps/directions (Neon-cached) + /maps/staticmap, key in Railway env GOOGLE_MAPS_KEY. Old client-side key deleted.
+- DUAL renderSetupBody: one in content.js (inline panel) AND one in panel.js (detached panel) — Setup-tab UI changes may need BOTH.
 
 ---
 
 ## Email System
-- Activation emails sent via Resend from hello@laneiq.org
-- sendKeyEmail() has retry logic: fails → waits 5s → retries → on second failure sends Bruno Telegram alert with customer email + key
-- Resend domain laneiq.org verified on Cloudflare (DKIM + SPF + MX all green as of May 26 2026)
-- If email not in Resend logs → check Railway logs for [LaneIQ] Resend error
+- License-key emails via BREVO (migrated from Resend — Resend had persistent DKIM failure)
+- Retry logic: fail → wait → retry → on second failure, Bruno Telegram alert with customer email + key
+- If email missing → check Railway logs for the send error
 
 ---
 
-## Bruno Cron Stack
-| Job | Schedule | What it does |
-|---|---|---|
-| dat-monitor | every 30m | Checks DAT for missing row-container selector |
-| stripe-webhook-monitor | daily | Checks Stripe webhook endpoints are enabled |
-| webhook-monitor | every 60m | Polls /webhook-failures, texts Alex if unacknowledged |
-| selector-monitor | every 30m | Polls /selector-errors, texts Alex if DAT selectors broken |
-
----
-
-## Debugging Rules
-1. Map ALL code paths before debugging
-2. content.js has TWO email injection systems — check both
-3. Check chrome.storage for stuck booleans if UI breaks silently
-4. DAT renames CSS classes — check first if extension stops working
-5. processRow async, chip injection sync — race condition possible
-6. Extension silently dead → add checkpoint logs to init()
-7. Any extension file change = new version + Chrome Store submission
-8. Dev version OAuth won't work — needs stable Chrome Store ID
+## Bruno Agent
+- Hermes agent on Railway, xAI OAuth / grok-4.3. 12+ cron jobs (Morning Briefing, Railway Crash Alert, Chrome Web Store Monitor, stripe-webhook-monitor, dat-monitor, selector-monitor, webhook-monitor, Weekly GBrain Digest, etc.). Full current list lives in GBrain.
+- DAT alert threshold: 50 failed rows before Telegram alert; dedup applied.
+- NEVER change Bruno auth/provider/API key without explicit permission. HERMES_REF never below v2026.5.16.
 
 ---
 
 ## Gmail / OAuth Status
-- gmail.send scope: submitted for Google verification May 25 2026
-- Do NOT re-add Gmail signature feature until Google verifies gmail.send
-- Current Gmail button opens compose window (no OAuth needed)
-- OAuth reply sent May 25 with domain fix + demo video
+- gmail.send scope: in Google verification. 4/5 Verification Center items GREEN; only Privacy policy was red.
+- Privacy policy content IS correct on live laneiq.org AND laneiq.org/privacy.html (both required clauses present).
+- Likely block: Google was pointed at laneiq.org/#privacy (a fragment anchor reviewers can't reliably parse). Fix: point OAuth consent screen Privacy policy URL at the STANDALONE https://laneiq.org/privacy.html. Reply sent to Trust & Safety with the standalone URL.
+- Do NOT re-add the Gmail signature feature until gmail.send is verified.
+- Verification is driven by the Cloud Console Verification Center + email replies to Trust & Safety — not just resubmitting.
 
 ---
 
 ## Infrastructure Costs
-- Railway: $5/month
-- Neon: $0 (free tier)
-- Resend: free tier
-- Total: ~$8-12/month
+- Railway ~$5/mo, Neon (Launch plan), Brevo free tier. Watch: GBrain autopilot daemon firing every 5 min kept Neon awake (cost leak) — noted.
 
 ---
 
-## Session Notes
-- May 13: v1.9 submitted, panelPopped fix, DAT class rename handled
-- May 15: Bruno save-link skill, webhook failure logging
-- May 17: Bruno cron stack complete, stripe-webhook-monitor added
-- May 18: DAT selector alerts, v1.17 submitted
-- May 26: v1.25 submitted — 7 major content.js fixes + email system fixed
+## Deep history / session notes → GBrain
+Per-session detail (what changed when, why) lives in GBrain, not here. Key slugs: laneiq-welcome-business-device-0628, laneiq-popup-cleanup-0628, laneiq-team-plan-layer4-packaged, laneiq-new-chat-briefing-0526.

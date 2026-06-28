@@ -62,6 +62,7 @@ async function validateLicenseKey(key, forceRefresh = false, email = '') {
           teamRole: data.team_role || null,
           seatLimit: data.seat_limit ?? null,
           seatsUsed: data.seats_used ?? null,
+          useTeam: true,
         });
         return { valid: true, cached: false, tier: 'team', teamRole: data.team_role || null };
       }
@@ -194,9 +195,29 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   // Silent background re-validation
   (async function silentRevalidate() {
     try {
-      const { licenseKey } = await chrome.storage.local.get(['licenseKey']);
+      const { licenseKey, teamEmail } = await chrome.storage.local.get(['licenseKey', 'teamEmail']);
       if (!licenseKey) return;
       const deviceId = await getDeviceId();
+
+      // Team keys must revalidate against /validate-team (the plain /validate
+      // now rejects them with use_team_validation, which would loop a reload).
+      if (isTeamKey(licenseKey)) {
+        if (!teamEmail) return; // can't team-validate without the seat email; leave install alone
+        const resp = await fetch(TEAM_VALIDATION_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: licenseKey, email: teamEmail, deviceId }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (!data.valid) {
+          if (data.reason === 'device_limit') return; // soft-degrade, same as solo/pro
+          await chrome.storage.local.set({ licenseValid: false });
+          window.location.reload();
+        }
+        return; // team keys carry no tier/useDB drift to reconcile
+      }
+
       const resp = await fetch(VALIDATION_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -238,27 +259,25 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
   // ── License key ───────────────────────────────────────────────────────────────
   const licenseInput  = document.getElementById('licenseInput');
   const licenseStatus = document.getElementById('licenseStatus');
-  const licenseSave   = document.getElementById('licenseSave');
 
-  if (licenseInput && licenseSave && licenseStatus) {
+  if (licenseInput && licenseStatus) {
     const saved = await chrome.storage.local.get(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier', 'teamEmail']);
     if (saved.licenseKey) {
-      licenseInput.placeholder = saved.licenseKey.slice(0, 8) + '••••••••';
+      licenseInput.style.display = 'none';
+      const maskedKey = saved.licenseKey.slice(0, 8) + '••••••••';
       const planLabel = saved.licenseTier === 'team' ? 'Team plan' : saved.licenseTier === 'pro' ? 'Pro' : 'Solo';
       const teamSuffix = (saved.licenseTier === 'team' && saved.teamEmail) ? ' · ' + saved.teamEmail : '';
       const age   = saved.licenseCheckedAt ? Date.now() - new Date(saved.licenseCheckedAt).getTime() : Infinity;
       const fresh = age < LICENSE_GRACE_MS;
       if (saved.licenseValid && fresh) {
-        licenseStatus.textContent = `✓ Active — ${planLabel}${teamSuffix}`;
+        licenseStatus.textContent = `✓ Active — ${planLabel}${teamSuffix} · ${maskedKey}`;
         licenseStatus.className = 'gmail-status set';
         document.getElementById('manageSubBtn').style.display = 'inline-block';
-        licenseSave.textContent = 'Change key';   // already active → re-entry, not first activation
       } else if (saved.licenseValid && !fresh) {
-        licenseStatus.textContent = `⚠ ${planLabel} cached — reconnect to verify`;
+        licenseStatus.textContent = `⚠ ${planLabel} cached (${maskedKey}) — reconnect to verify`;
         licenseStatus.className = 'gmail-status unset';
-        licenseSave.textContent = 'Change key';
       } else {
-        licenseStatus.textContent = '✗ License invalid';
+        licenseStatus.textContent = `✗ License invalid — ${maskedKey}`;
         licenseStatus.className = 'gmail-status unset';
       }
     }
@@ -267,79 +286,12 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
       chrome.tabs.create({ url: 'https://billing.stripe.com/p/login/7sY9AScHv3lMaKY2GZ5EY00' });
     });
 
-    document.getElementById('licenseClear').addEventListener('click', async () => {
+    document.getElementById('licenseLogout').addEventListener('click', async () => {
       await chrome.storage.local.remove(['licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier', 'useCSV', 'useDB', 'teamId', 'teamEmail', 'teamRole', 'seatLimit', 'seatsUsed', 'useTeam']);
-      licenseInput.value = '';
-      licenseInput.placeholder = 'LANEIQ-XXXX-XXXX-XXXX';
-      licenseStatus.textContent = 'License cleared';
-      licenseStatus.className = 'gmail-status unset';
-      setTimeout(() => {
-        licenseStatus.textContent = 'Enter your license key to activate LaneIQ';
-      }, 1500);
+      window.location.reload();
     });
 
-    const licenseEmailRow   = document.getElementById('license-email-row');
-    const licenseEmailInput = document.getElementById('licenseEmailInput');
-    function revealLicenseEmail(msg) {
-      if (licenseEmailRow) licenseEmailRow.style.display = 'flex';
-      if (msg) { licenseStatus.textContent = msg; licenseStatus.className = 'gmail-status unset'; }
-    }
-    licenseInput.addEventListener('input', () => {
-      if (isTeamKey(licenseInput.value)) revealLicenseEmail('');
-    });
-
-    licenseSave.addEventListener('click', async () => {
-      const key = licenseInput.value.trim();
-      if (!key) { licenseStatus.textContent = 'Paste your license key'; return; }
-      const email = licenseEmailInput ? licenseEmailInput.value.trim() : '';
-      if (isTeamKey(key) && !email) { revealLicenseEmail('Email required for team activation'); return; }
-      licenseStatus.textContent = 'Checking…';
-      licenseStatus.className = 'gmail-status';
-      const { valid, tier, reason, deviceLimit } = await validateLicenseKey(key, true, email);
-      if (valid) {
-        const tierLabel = tier === 'team' ? ' · Team' : tier === 'pro' ? ' · Pro' : '';
-        licenseStatus.textContent = `✓ License active${tierLabel}`;
-        licenseStatus.className = 'gmail-status set';
-        document.getElementById('manageSubBtn').style.display = 'inline-block';
-        licenseInput.value = '';
-        licenseInput.placeholder = key.slice(0, 8) + '••••••••';
-        if (licenseEmailInput) licenseEmailInput.value = '';
-      } else if (reason === 'use_team_validation' || reason === 'missing_email') {
-        revealLicenseEmail(reason === 'missing_email'
-          ? 'Email required for team activation'
-          : 'This is a team key — enter your email and click Activate');
-      } else if (isTeamKey(key)) {
-        licenseStatus.textContent = '✗ ' + teamReasonText(reason, deviceLimit);
-        licenseStatus.className = 'gmail-status unset';
-      } else {
-        licenseStatus.textContent = '✗ Invalid key — check your email or contact support';
-        licenseStatus.className = 'gmail-status unset';
-      }
-    });
   }
-
-  // ── Clear all data ────────────────────────────────────────────────────────────
-  document.getElementById('clearBtn').addEventListener('click', async () => {
-    // Preserve all settings managed by panel tabs and popup
-    const keep = await chrome.storage.local.get([
-      'gmailEmail', 'gmailIndex',
-      'senderEmail', 'senderGmailIndex',
-      'emailTemplate', 'emailSubject', 'emailTemplates', 'activeTemplate',
-      'signature',
-      'mapsApiKey',
-      'lovedLoads',
-      'licenseKey', 'licenseValid', 'licenseCheckedAt', 'licenseTier',
-      'useCSV', 'useDB',
-      'teamId', 'teamEmail', 'teamRole', 'seatLimit', 'seatsUsed', 'useTeam',
-    ]);
-    await chrome.storage.local.clear();
-    const toRestore = Object.fromEntries(Object.entries(keep).filter(([, v]) => v !== undefined));
-    if (Object.keys(toRestore).length) await chrome.storage.local.set(toRestore);
-    document.getElementById('statusVal').textContent = 'No data loaded';
-    document.getElementById('statusSub').textContent = 'Open the panel on DAT → Setup tab to upload CSV';
-    document.getElementById('statusBox').className = 'status-box';
-    document.getElementById('errorMsg').style.display = 'none';
-  });
 
   // ── Reload DAT tabs ───────────────────────────────────────────────────────────
   document.getElementById('reloadBtn').addEventListener('click', async () => {
