@@ -87,10 +87,11 @@ async function validateLicenseKey(key, forceRefresh = false, email = '') {
 
   try {
     const deviceId = await getDeviceId();
+    const normEmail = (email || '').trim().toLowerCase();
     const resp = await fetch(VALIDATION_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key: trimmedKey, deviceId }),
+      body: JSON.stringify({ key: trimmedKey, email: normEmail, deviceId }),
     });
     const data = await resp.json();
     if (data.valid) {
@@ -146,20 +147,18 @@ if (typeof document !== 'undefined') document.addEventListener('DOMContentLoaded
     const activationStatus = document.getElementById('activation-status');
     const activationEmailWrap  = document.getElementById('activation-email-wrap');
     const activationEmailInput = document.getElementById('activation-email-input');
-    // Reveal the email field as soon as a team key is typed.
+    // Email now required for ALL plans — show the field unconditionally on load.
     function revealEmail(msg) {
       if (activationEmailWrap) activationEmailWrap.style.display = 'block';
       if (msg) { activationStatus.textContent = msg; activationStatus.style.color = '#ff9500'; }
     }
-    activationInput.addEventListener('input', () => {
-      if (isTeamKey(activationInput.value)) revealEmail('');
-    });
+    revealEmail('');
     async function attemptActivation() {
       const key = activationInput.value.trim();
       if (!key) { activationStatus.textContent = 'Please enter a license key.'; return; }
       const email = activationEmailInput ? activationEmailInput.value.trim() : '';
-      // Team key with no email yet → reveal field and stop (don't hit the server).
-      if (isTeamKey(key) && !email) { revealEmail('Email required for team activation'); return; }
+      // Email now required for ALL plans (not just team keys).
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { revealEmail('Please enter a valid email address'); return; }
       activationBtn.textContent = 'Checking...';
       activationBtn.disabled = true;
       activationStatus.style.color = '#ff3b30';

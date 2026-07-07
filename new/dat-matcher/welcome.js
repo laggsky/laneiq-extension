@@ -112,9 +112,8 @@ function clearActError() {
 
 actBtn.addEventListener('click', handleActivate);
 actInput.addEventListener('keydown', e => { if (e.key === 'Enter') handleActivate(); });
-actInput.addEventListener('input', () => {
-  if (actEmailWrap) actEmailWrap.style.display = isTeamKey(actInput.value) ? 'block' : 'none';
-});
+// Email now required for ALL plans — show unconditionally on load.
+if (actEmailWrap) actEmailWrap.style.display = 'block';
 if (actEmail) actEmail.addEventListener('keydown', e => { if (e.key === 'Enter') handleActivate(); });
 
 async function handleActivate() {
@@ -123,9 +122,9 @@ async function handleActivate() {
 
   const team  = isTeamKey(raw);
   const email = actEmail ? actEmail.value.trim().toLowerCase() : '';
-  if (team && !email) {
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     if (actEmailWrap) actEmailWrap.style.display = 'block';
-    showActError('Email required for team activation.');
+    showActError('Please enter a valid email address.');
     if (actEmail) actEmail.focus();
     return;
   }
@@ -146,7 +145,7 @@ async function handleActivate() {
   try {
     const deviceId = await getDeviceId();
     const url  = team ? VALIDATE_TEAM_URL : VALIDATE_URL;
-    const body = team ? { key: raw, email, deviceId } : { key: raw, deviceId };
+    const body = { key: raw, email, deviceId };
     const resp = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },

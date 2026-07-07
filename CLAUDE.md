@@ -38,9 +38,11 @@ Deep history + session-by-session detail lives in GBrain. This file is the opera
 ---
 
 ## Current Version
-- Extension live ~v1.51. Team Plan + popup overhaul + welcome team activation shipped across v1.49–v1.51.
-- NOTE: as of the latest session, popup/welcome/team edits are LIVE in the unpacked extension but may NOT be packaged/committed yet — confirm git + zip state before assuming.
-- Git: PAT expired — backend deploys via `railway up` (so production runs current code regardless); GitHub push is backup-only and blocked until PAT renewed.
+- v1.53 submitted to Chrome Store (July 6/7). v1.52 is/was live in the meantime.
+- v1.53 adds: email required on activation for ALL plans (solo/pro + team), validated with a real regex not just "@" presence; welcome.html footer corrected to list Business + $17/month floor.
+- Backend land-grab mode LIVE since July 6: ENFORCE_LIMITS env flag (Railway, set to "false") bypasses all device/seat caps — everyone activates freely, all activity still logged (license_devices, team_devices). Flip to "true" to restore full enforcement instantly, no redeploy needed.
+- Backend also captures optional `email` on solo/pro /validate calls now (license_devices.email column) — never required server-side, only required client-side in the extension UI.
+- Git: PAT is WORKING. If push fails with "Invalid username or token" or "not a git repository," check (a) you're in the right directory, (b) `git remote -v` for a dead token embedded IN the URL (fix: `git remote set-url origin https://github.com/laggsky/<repo>.git`). Do NOT assume PAT is expired without checking this first — it caused hours of false debugging.
 
 ## Ship Checklist (do IN ORDER — prevents shipping a stale build)
 A stale build once shipped because code landed but the manifest wasn't bumped, so the corrected build couldn't be re-uploaded. Never again:
